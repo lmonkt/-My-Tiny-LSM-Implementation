@@ -1,0 +1,13 @@
+.vscode
+.xmake
+build
+sdk/tonilsm/dist
+sdk/tonilsm/build
+sdk/tonilsm/tonilsm/core/lib
+sdk/tonilsm/tonilsm.egg-info
+*__pycache__*
+.idea/editor.xml
+.idea/modules.xml
+.idea/toni-lsm.iml
+.idea/vcs.xml
+.idea/.gitignore
