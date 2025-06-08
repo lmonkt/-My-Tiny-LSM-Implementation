@@ -15,6 +15,8 @@ add_requires("toml11", { system = false })
 
 if is_mode("debug") then
     add_defines("LSM_DEBUG")
+    add_cxxflags("-g3", "-O0", "-fno-omit-frame-pointer")
+    add_ldflags("-g3")
 end
 
 target("logger")
