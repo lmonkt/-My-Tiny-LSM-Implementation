@@ -89,11 +89,13 @@ public:
   LSM(std::string path);
   ~LSM();
 
-  std::optional<std::string> get(const std::string &key);
+  std::optional<std::string> get(const std::string &key,
+                                 bool tranc_off = false);
   std::vector<std::pair<std::string, std::optional<std::string>>>
   get_batch(const std::vector<std::string> &keys);
 
-  void put(const std::string &key, const std::string &value);
+  void put(const std::string &key, const std::string &value,
+           bool tranc_off = false);
   void put_batch(const std::vector<std::pair<std::string, std::string>> &kvs);
 
   void remove(const std::string &key);

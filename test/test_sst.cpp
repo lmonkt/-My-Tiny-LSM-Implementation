@@ -223,11 +223,9 @@ TEST_F(SSTTest, LargeSSTPredicate) {
       sst_iters_monotony_predicate(sst, 0, [](const std::string &key) {
         if (key < "key100") {
           return 1;
-          ;
         }
         if (key > "key500") {
           return -1;
-          ;
         }
         return 0;
         // return key >= "key100" && key <= "key500";

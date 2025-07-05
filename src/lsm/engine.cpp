@@ -188,8 +188,8 @@ LSM::~LSM() {
   tran_manager_->write_tranc_id_file();
 }
 
-std::optional<std::string> LSM::get(const std::string &key) {
-  auto tranc_id = tran_manager_->getNextTransactionId();
+std::optional<std::string> LSM::get(const std::string &key, bool tranc_off) {
+  auto tranc_id = tranc_off ? 0 : tran_manager_->getNextTransactionId();
   auto res = engine->get(key, tranc_id);
 
   if (res.has_value()) {
@@ -219,8 +219,9 @@ LSM::get_batch(const std::vector<std::string> &keys) {
   return results;
 }
 
-void LSM::put(const std::string &key, const std::string &value) {
-  auto tranc_id = tran_manager_->getNextTransactionId();
+void LSM::put(const std::string &key, const std::string &value,
+              bool tranc_off) {
+  auto tranc_id = tranc_off ? 0 : tran_manager_->getNextTransactionId();
   engine->put(key, value, tranc_id);
 }
 

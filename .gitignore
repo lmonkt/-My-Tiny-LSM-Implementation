@@ -11,3 +11,5 @@ sdk/tonilsm/tonilsm.egg-info
 .idea/toni-lsm.iml
 .idea/vcs.xml
 .idea/.gitignore
+book
+sdk/tinylsm

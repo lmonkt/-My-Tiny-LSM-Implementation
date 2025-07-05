@@ -76,13 +76,13 @@ TEST_F(LSMTest, Persistence) {
   for (int i = 0; i < num; ++i) {
     std::string key = "key" + std::to_string(i);
     if (kvs.find(key) != kvs.end()) {
-      EXPECT_EQ(lsm.get(key).value(), kvs[key]);
+      EXPECT_EQ(lsm.get(key, true).value(), kvs[key]);
     } else {
       if (key == "key4410") {
         // debug
         auto res = lsm.get("key4410");
       }
-      if (lsm.get(key).has_value()) {
+      if (lsm.get(key, true).has_value()) {
         std::cout << "key" << i << " not exist but found" << std::endl;
         exit(-1);
       }
