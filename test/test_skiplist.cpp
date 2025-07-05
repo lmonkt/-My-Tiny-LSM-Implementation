@@ -329,6 +329,7 @@ TEST(SkipListTest, ItersPredicate_Large) {
 }
 
 // 测试包含事务 id 的插入和查找
+// ! Lab 5.1 后需要通过此单元测试, 在此前你可以忽略这个单元测试
 TEST(SkipListTest, TransactionId) {
   SkipList skipList;
   skipList.put("key1", "value1", 1);
