@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 enum class OperationType {
   CREATE,
@@ -56,4 +56,4 @@ private:
   std::string value_;
   uint16_t record_len_;
 };
-} // namespace toni_lsm
+} // namespace tiny_lsm

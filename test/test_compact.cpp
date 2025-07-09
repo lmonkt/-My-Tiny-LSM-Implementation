@@ -6,7 +6,7 @@
 #include <gtest/gtest.h>
 #include <iostream>
 
-using namespace ::toni_lsm;
+using namespace ::tiny_lsm;
 
 class CompactTest : public ::testing::Test {
 protected:

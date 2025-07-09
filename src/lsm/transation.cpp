@@ -12,7 +12,7 @@
 #include <thread>
 #include <vector>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 inline std::string isolation_level_to_string(const IsolationLevel &level) {
   switch (level) {
@@ -137,4 +137,4 @@ bool TranManager::write_to_wal(const std::vector<Record> &records) {
 //     write_tranc_id_file();
 //   }
 // }
-} // namespace toni_lsm
+} // namespace tiny_lsm

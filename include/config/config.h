@@ -6,7 +6,7 @@
 // Include the necessary toml11 header
 // Assuming a common setup where you include the main header:
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 class TomlConfig {
 private:
@@ -77,4 +77,4 @@ public:
   static const TomlConfig &
   getInstance(const std::string &config_path = "config.toml");
 };
-} // namespace toni_lsm
+} // namespace tiny_lsm

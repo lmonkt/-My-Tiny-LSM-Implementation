@@ -7,7 +7,7 @@
 #include <string>
 
 // TODO: 需要进行单元测试
-namespace toni_lsm {
+namespace tiny_lsm {
 Level_Iterator::Level_Iterator(std::shared_ptr<LSMEngine> engine,
                                uint64_t max_tranc_id)
     : engine_(engine), max_tranc_id_(max_tranc_id), rlock_(engine_->ssts_mtx) {
@@ -186,4 +186,4 @@ BaseIterator::pointer Level_Iterator::operator->() const {
   update_current();
   return &(*cached_value);
 }
-} // namespace toni_lsm
+} // namespace tiny_lsm

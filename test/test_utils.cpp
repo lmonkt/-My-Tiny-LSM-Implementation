@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 #include <random>
 
-using namespace ::toni_lsm;
+using namespace ::tiny_lsm;
 
 class FileTest : public ::testing::Test {
 protected:

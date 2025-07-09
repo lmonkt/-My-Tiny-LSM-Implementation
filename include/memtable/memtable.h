@@ -14,7 +14,7 @@
 #include <unordered_map>
 #include <utility>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 class BlockCache;
 class SST;
@@ -77,4 +77,4 @@ private:
   std::shared_mutex frozen_mtx; // 冻结表的锁
   std::shared_mutex cur_mtx;    // 活跃表的锁
 };
-} // namespace toni_lsm
+} // namespace tiny_lsm

@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 // *********************** LSMEngine ***********************
 LSMEngine::LSMEngine(std::string path) : data_dir(path) {
@@ -272,4 +272,4 @@ LSM::begin_tran(const IsolationLevel &isolation_level) {
 }
 
 void LSM::set_log_level(const std::string &level) { reset_log_level(level); }
-} // namespace toni_lsm
+} // namespace tiny_lsm

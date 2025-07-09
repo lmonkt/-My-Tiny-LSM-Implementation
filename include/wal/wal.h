@@ -13,7 +13,7 @@
 #include <thread>
 #include <vector>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 class WAL {
 public:
@@ -45,4 +45,4 @@ protected:
   uint64_t max_finished_tranc_id_;
   uint64_t clean_interval_;
 };
-} // namespace toni_lsm
+} // namespace tiny_lsm

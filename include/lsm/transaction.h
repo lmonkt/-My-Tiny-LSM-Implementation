@@ -11,7 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 enum class IsolationLevel {
   READ_UNCOMMITTED,
@@ -97,4 +97,4 @@ private:
   FileObj tranc_id_file_;
 };
 
-} // namespace toni_lsm
+} // namespace tiny_lsm

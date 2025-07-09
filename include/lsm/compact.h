@@ -1,6 +1,6 @@
 #pragma once
 
-namespace toni_lsm {
+namespace tiny_lsm {
 enum class CompactType {
   FullCompact,
 };

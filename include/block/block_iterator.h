@@ -8,7 +8,7 @@
 #include <string>
 #include <utility>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 class Block;
 
 class BlockIterator {
@@ -48,4 +48,4 @@ private:
   uint64_t tranc_id_;                             // 当前事务 id
   mutable std::optional<value_type> cached_value; // 缓存当前值
 };
-} // namespace toni_lsm
+} // namespace tiny_lsm

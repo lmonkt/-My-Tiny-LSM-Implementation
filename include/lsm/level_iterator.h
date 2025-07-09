@@ -4,7 +4,7 @@
 #include <optional>
 #include <shared_mutex>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 class LSMEngine;
 
 class Level_Iterator : public BaseIterator {
@@ -36,4 +36,4 @@ private:
   std::pair<size_t, std::string> get_min_key_idx() const;
   void skip_key(const std::string &key);
 };
-} // namespace toni_lsm
+} // namespace tiny_lsm

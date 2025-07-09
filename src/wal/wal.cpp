@@ -7,7 +7,7 @@
 #include <iostream>
 #include <vector>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 // 从零开始的初始化流程
 WAL::WAL(const std::string &log_dir, size_t buffer_size,
@@ -40,4 +40,4 @@ void WAL::cleaner() {
   // TODO Lab 5.4 : 实现WAL的清理线程
 }
 
-} // namespace toni_lsm
+} // namespace tiny_lsm

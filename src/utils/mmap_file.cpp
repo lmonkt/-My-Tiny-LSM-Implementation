@@ -6,7 +6,7 @@
 #include <sys/stat.h>
 #include <vector>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 bool MmapFile::open(const std::string &filename, bool create) {
   filename_ = filename;
@@ -142,4 +142,4 @@ bool MmapFile::create_and_map(const std::string &path, size_t size) {
   file_size_ = size;
   return true;
 }
-} // namespace toni_lsm
+} // namespace tiny_lsm

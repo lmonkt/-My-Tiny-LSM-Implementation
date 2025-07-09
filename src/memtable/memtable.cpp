@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 class BlockCache;
 
@@ -254,4 +254,4 @@ MemTable::iters_monotony_predicate(
   // TODO Lab 2.3 MemTable 的谓词查询迭代器起始范围
   return std::nullopt;
 }
-} // namespace toni_lsm
+} // namespace tiny_lsm

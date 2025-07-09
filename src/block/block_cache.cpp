@@ -6,7 +6,7 @@
 #include <mutex>
 #include <unordered_map>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 BlockCache::BlockCache(size_t capacity, size_t k)
     : capacity_(capacity), k_(k) {}
 
@@ -31,4 +31,4 @@ double BlockCache::hit_rate() const {
 void BlockCache::update_access_count(std::list<CacheItem>::iterator it) {
   // TODO: Lab 4.8 更新统计信息
 }
-} // namespace toni_lsm
+} // namespace tiny_lsm

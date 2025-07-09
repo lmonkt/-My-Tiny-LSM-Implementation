@@ -4,7 +4,7 @@
 #include <optional>
 #include <stdexcept>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 // predicate返回值:
 //   0: 谓词
@@ -117,4 +117,4 @@ SstIterator::merge_sst_iterator(std::vector<SstIterator> iter_vec,
   }
   return std::make_pair(it_begin, HeapIterator());
 }
-} // namespace toni_lsm
+} // namespace tiny_lsm

@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 class FileObj {
 private:
@@ -67,4 +67,4 @@ public:
 
   bool sync();
 };
-} // namespace toni_lsm
+} // namespace tiny_lsm

@@ -5,7 +5,7 @@
 #include <memory>
 #include <vector>
 
-using namespace ::toni_lsm;
+using namespace ::tiny_lsm;
 
 class BlockCacheTest : public ::testing::Test {
 protected:

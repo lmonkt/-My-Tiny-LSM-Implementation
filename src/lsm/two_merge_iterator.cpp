@@ -1,6 +1,6 @@
 #include "../../include/lsm/two_merge_iterator.h"
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 TwoMergeIterator::TwoMergeIterator() {}
 
@@ -89,4 +89,4 @@ TwoMergeIterator::pointer TwoMergeIterator::operator->() const {
 void TwoMergeIterator::update_current() const {
   // TODO: Lab 4.4: 实现更新缓存键值对的辅助函数
 }
-} // namespace toni_lsm
+} // namespace tiny_lsm

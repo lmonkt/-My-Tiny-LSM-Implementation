@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-using namespace ::toni_lsm;
+using namespace ::tiny_lsm;
 
 // 测试基本插入、查找和删除
 TEST(SkipListTest, BasicOperations) {

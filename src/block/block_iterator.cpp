@@ -6,7 +6,7 @@
 
 class Block;
 
-namespace toni_lsm {
+namespace tiny_lsm {
 BlockIterator::BlockIterator(std::shared_ptr<Block> b, size_t index,
                              uint64_t tranc_id)
     : block(b), current_index(index), tranc_id_(tranc_id),
@@ -66,4 +66,4 @@ void BlockIterator::skip_by_tranc_id() {
   // ? 只是进行标记以供你在后续Lab实现事务功能后修改
   // ? 现在你不需要考虑这个函数
 }
-} // namespace toni_lsm
+} // namespace tiny_lsm

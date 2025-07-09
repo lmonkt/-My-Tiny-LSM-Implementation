@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstring>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 Record Record::createRecord(uint64_t tranc_id) {
   // TODO: Lab 5.3 实现创建事务的Record
@@ -66,4 +66,4 @@ bool Record::operator==(const Record &other) const {
 }
 
 bool Record::operator!=(const Record &other) const { return !(*this == other); }
-} // namespace toni_lsm
+} // namespace tiny_lsm

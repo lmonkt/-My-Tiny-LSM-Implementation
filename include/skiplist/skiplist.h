@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 // ************************ SkipListNode ************************
 struct SkipListNode {
@@ -149,4 +149,4 @@ public:
 
   void print_skiplist();
 };
-} // namespace toni_lsm
+} // namespace tiny_lsm

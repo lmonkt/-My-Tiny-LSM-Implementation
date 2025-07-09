@@ -6,7 +6,7 @@
 #include <filesystem>
 #include <gtest/gtest.h>
 
-using namespace ::toni_lsm;
+using namespace ::tiny_lsm;
 
 class SSTTest : public ::testing::Test {
 protected:

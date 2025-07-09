@@ -2,7 +2,7 @@
 #include "../lsm/engine.h"
 #include <memory>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 std::vector<std::string>
 get_fileds_from_hash_value(const std::optional<std::string> &field_list_opt);
 
@@ -106,4 +106,4 @@ private:
   std::string redis_scard(const std::string &key);
   std::string redis_smembers(const std::string &key);
 };
-} // namespace toni_lsm
+} // namespace tiny_lsm

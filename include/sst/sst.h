@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 class SstIterator;
 
@@ -125,4 +125,4 @@ public:
   std::shared_ptr<SST> build(size_t sst_id, const std::string &path,
                              std::shared_ptr<BlockCache> block_cache);
 };
-} // namespace toni_lsm
+} // namespace tiny_lsm

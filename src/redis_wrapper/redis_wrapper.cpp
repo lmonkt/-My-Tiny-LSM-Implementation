@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 // Helper functions
 RedisWrapper::RedisWrapper(const std::string &db_path) {
@@ -350,4 +350,4 @@ std::string RedisWrapper::redis_smembers(const std::string &key) {
   // TODO: Lab 6.3 获取集合的所有元素
   return "*0\r\n";
 }
-} // namespace toni_lsm
+} // namespace tiny_lsm

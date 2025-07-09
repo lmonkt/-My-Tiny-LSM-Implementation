@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-using namespace ::toni_lsm;
+using namespace ::tiny_lsm;
 
 class RedisCommandsTest : public ::testing::Test {
 protected:

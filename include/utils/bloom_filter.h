@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 class BloomFilter {
 public:
@@ -54,4 +54,4 @@ private:
 
   size_t hash(const std::string &key, size_t idx) const;
 };
-} // namespace toni_lsm
+} // namespace tiny_lsm

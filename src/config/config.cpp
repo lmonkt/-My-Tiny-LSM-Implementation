@@ -3,7 +3,7 @@
 #include <iostream>
 #include <toml.hpp>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 // Private helper to set all default values
 void TomlConfig::setDefaultValues() {
@@ -249,4 +249,4 @@ bool TomlConfig::saveToFile(const std::string &filePath) {
     return false;
   }
 }
-} // namespace toni_lsm
+} // namespace tiny_lsm

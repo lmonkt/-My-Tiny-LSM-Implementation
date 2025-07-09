@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-using namespace ::toni_lsm;
+using namespace ::tiny_lsm;
 
 enum class OPS {
   // 测试操作

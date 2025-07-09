@@ -5,7 +5,7 @@
 
 #include <memory>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 class TwoMergeIterator : public BaseIterator {
 private:
@@ -37,4 +37,4 @@ public:
 
   pointer operator->() const;
 };
-} // namespace toni_lsm
+} // namespace tiny_lsm

@@ -6,7 +6,7 @@
 #include <tuple>
 #include <utility>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 // ************************ SkipListIterator ************************
 BaseIterator &SkipListIterator::operator++() {
@@ -175,4 +175,4 @@ void SkipList::print_skiplist() {
   }
   std::cout << std::endl;
 }
-} // namespace toni_lsm
+} // namespace tiny_lsm

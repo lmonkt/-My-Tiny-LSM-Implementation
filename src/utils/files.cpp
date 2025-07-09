@@ -2,7 +2,7 @@
 #include <cstring>
 #include <stdexcept>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 FileObj::FileObj() : m_file(std::make_unique<StdFile>()) {}
 
 FileObj::~FileObj() = default;
@@ -133,4 +133,4 @@ bool FileObj::append(std::vector<uint8_t> &buf) {
 }
 
 bool FileObj::sync() { return m_file->sync(); }
-} // namespace toni_lsm
+} // namespace tiny_lsm

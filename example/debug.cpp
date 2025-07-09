@@ -2,7 +2,7 @@
 #include <iostream>
 #include <string>
 
-using namespace ::toni_lsm;
+using namespace ::tiny_lsm;
 
 int main() {
   LSM lsm("test");

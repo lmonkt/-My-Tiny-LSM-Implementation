@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <string>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 Block::Block(size_t capacity) : capacity(capacity) {}
 
 std::vector<uint8_t> Block::encode() {
@@ -159,4 +159,4 @@ BlockIterator Block::end() {
   // TODO Lab 3.2 获取end迭代器
   return BlockIterator(nullptr, 0, 0);
 }
-} // namespace toni_lsm
+} // namespace tiny_lsm

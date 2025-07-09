@@ -8,7 +8,7 @@
 #include <memory>
 #include <vector>
 
-using namespace ::toni_lsm;
+using namespace ::tiny_lsm;
 
 class BlockTest : public ::testing::Test {
 protected:

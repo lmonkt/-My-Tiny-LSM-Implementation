@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-using namespace ::toni_lsm;
+using namespace ::tiny_lsm;
 
 // 测试基本的插入和查询操作
 TEST(MemTableTest, BasicOperations) {

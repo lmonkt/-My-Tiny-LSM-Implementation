@@ -8,7 +8,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 class MmapFile {
 private:
@@ -53,4 +53,4 @@ private:
   MmapFile(const MmapFile &) = delete;
   MmapFile &operator=(const MmapFile &) = delete;
 };
-} // namespace toni_lsm
+} // namespace tiny_lsm

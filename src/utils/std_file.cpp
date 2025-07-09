@@ -1,6 +1,6 @@
 #include "../../include/utils/std_file.h"
 
-namespace toni_lsm {
+namespace tiny_lsm {
 
 bool StdFile::open(const std::string &filename, bool create) {
   filename_ = filename;
@@ -63,4 +63,4 @@ bool StdFile::sync() {
 }
 
 bool StdFile::remove() { return std::remove(filename_.c_str()) == 0; }
-} // namespace toni_lsm
+} // namespace tiny_lsm
