@@ -1,9 +1,12 @@
 CompileFlags:            # 编译标志部分
   Add:
     - "-std=c++20"      # 添加 C++17 支持
-    - "-isystem/home/tonixxu/proj/vcpkg/installed/x64-linux/include" # 包含头文件, 绝对路径
-    - "-isystem/home/tonixxu/.xmake/packages/m/muduo/2022.11.01/e9382a25649e4e43bf04f01f925d9c2f/include" # 包含头文件, 绝对路径
-    - "-isystem/home/tonixxu/.xmake/packages/p/pybind11/v2.13.6/8d7565588f4b45f7a0635954fd1f2205/include" # 包含头文件, 绝对路径
-    - "-isystem/home/tonixxu/.xmake/packages/t/toml11/v4.2.0/aa1e547622094bbd84d3258c334b2808/include"
-    - "-isystem/home/tonixxu/.xmake/packages/s/spdlog/v1.15.0/541fa885f2734ba2aee892c53fa1241f/include"
-    - "-isystem/home/tonixxu/miniconda3/include/python3.12" # 包含头文件, 绝对路径
+    - "-isystem/home/tjy1234/proj/vcpkg/installed/x64-linux/include" # 包含头文件, 绝对路径
+    - "-isystem/home/tjy1234/.xmake/packages/m/muduo/2022.11.01/e9382a25649e4e43bf04f01f925d9c2f/include" # 包含头文件, 绝对路径
+    - "-isystem/home/tjy1234/.xmake/packages/p/pybind11/v2.13.6/8d7565588f4b45f7a0635954fd1f2205/include" # 包含头文件, 绝对路径
+    - "-isystem/home/tjy1234/.xmake/packages/t/toml11/v4.4.0/d9b5d9555a9849b0a8e5714c4e66d566/include"
+    - "-isystem/home/tjy1234/.xmake/packages/s/spdlog/v1.15.3/281ab689e3ca4a04813dc400d53c7ac7/include"
+    - "-isystem/home/tjy1234/.xmake/packages/g/gtest/v1.16.0/ffe1b0301af44c69a4cb67d57595b02c/include"
+    - "-isystem/home/tjy1234/.xmake/packages/p/python/3.13.2/7dbc4c2192884093912e9407517d19cf/include/python3.13" # 包含头文件, 绝对路径
+    - "-isystem/home/tjy1234y/proj/vcpkg/installed/x64-linux/include"
+    - "-isystem/home/tjy1234y/.xmake/packages/m/muduo/2022.11.01/e9382a25649e4e43bf04f01f925d9c2f/include"
