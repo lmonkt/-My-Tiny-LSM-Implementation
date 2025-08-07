@@ -1,4 +1,5 @@
 #include "../../include/iterator/iterator.h"
+#include <memory>
 #include <tuple>
 #include <vector>
 
@@ -7,17 +8,26 @@ namespace tiny_lsm {
 // *************************** SearchItem ***************************
 bool operator<(const SearchItem &a, const SearchItem &b) {
   // TODO: Lab2.2 实现比较规则
-  return true;
+  if (a.key_ != b.key_) {
+    return a.key_ < b.key_;
+  }
+  if (a.tranc_id_ != b.tranc_id_) {
+    return a.tranc_id_ > b.tranc_id_;
+  }
+  if (a.level_ < b.level_) {
+    return true;
+  }
+  return a.idx_ < b.idx_;
 }
 
 bool operator>(const SearchItem &a, const SearchItem &b) {
   // TODO: Lab2.2 实现比较规则
-  return true;
+  return b < a;
 }
 
 bool operator==(const SearchItem &a, const SearchItem &b) {
   // TODO: Lab2.2 实现比较规则
-  return true;
+  return a.idx_ == b.idx_ && a.key_ == b.key_;
 }
 
 // *************************** HeapIterator ***************************
@@ -25,37 +35,84 @@ HeapIterator::HeapIterator(std::vector<SearchItem> item_vec,
                            uint64_t max_tranc_id)
     : max_tranc_id_(max_tranc_id) {
   // TODO: Lab2.2 实现 HeapIterator 构造函数
+  for (auto &item : item_vec) {
+    items.push(std::move(item));
+  }
+  current.reset();
+  while (!items.empty()) {
+    auto top = items.top();
+    items.pop();
+    while (!items.empty() && top.key_ == items.top().key_) {
+      items.pop();
+    }
+    if (!top.value_.empty()) {
+      current = std::make_shared<value_type>(std::move(top.key_),
+                                             std::move(top.value_));
+      break;
+    }
+  }
 }
 
 HeapIterator::pointer HeapIterator::operator->() const {
   // TODO: Lab2.2 实现 -> 重载
-  return nullptr;
+  return current.get(); //用法：iter->first 或 iter->second，等价于(*iter).first
 }
 
 HeapIterator::value_type HeapIterator::operator*() const {
   // TODO: Lab2.2 实现 * 重载
-  return {};
+  return *current; //用法：auto kv = *iter
 }
 
 BaseIterator &HeapIterator::operator++() {
   // TODO: Lab2.2 实现 ++ 重载
+  current.reset();
+  while (!items.empty()) {
+    auto top = items.top();
+    items.pop();
+    while (!items.empty() && top.key_ == items.top().key_) {
+      items.pop();
+    }
+    if (top.value_.empty()) {
+      continue;
+    }
+    current = std::make_shared<value_type>(std::move(top.key_),
+                                           std::move(top.value_));
+    break;
+  }
   return *this;
 }
 
 bool HeapIterator::operator==(const BaseIterator &other) const {
   // TODO: Lab2.2 实现 == 重载
-  return true;
+  // 比较当前迭代器的值与other的值是否相等
+  const HeapIterator *other_heap = dynamic_cast<const HeapIterator *>(&other);
+  if (!other_heap)
+    return false;
+  if (!current && !other_heap->current)
+    return true;
+  if (!current || !other_heap->current)
+    return false;
+  return *current == *(other_heap->current);
 }
 
 bool HeapIterator::operator!=(const BaseIterator &other) const {
   // TODO: Lab2.2 实现 != 重载
-  return true;
+  const HeapIterator *other_heap = dynamic_cast<const HeapIterator *>(&other);
+  if (!other_heap)
+    return true;
+  if (!current && !other_heap->current)
+    return false;
+  if (!current || !other_heap->current)
+    return true;
+  return *current != *(other_heap->current);
 }
 
 bool HeapIterator::top_value_legal() const {
   // TODO: Lab2.2 判断顶部元素是否合法
   // ? 被删除的值是不合法
   // ? 不允许访问的事务创建或更改的键值对不合法(暂时忽略)
+  if (items.top().value_.empty())
+    return false;
   return true;
 }
 

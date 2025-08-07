@@ -291,11 +291,35 @@ size_t MemTable::get_total_size() {
 
 HeapIterator MemTable::begin(uint64_t tranc_id) {
   // TODO Lab 2.2 MemTable 的迭代器
-  return {};
+  std::shared_lock<std::shared_mutex> slock1(cur_mtx);
+  std::shared_lock<std::shared_mutex> slock2(frozen_mtx);
+  std::vector<SearchItem> sea;
+  for (auto tmp : current_table->flush()) {
+    auto [key, value, id] = tmp;
+    if (id != 0 && id > tranc_id) {
+      continue;
+    }
+    sea.emplace_back(SearchItem(key, value, 0, 0, id));
+  }
+  int table_id = 1;
+
+  for (auto tmp : frozen_tables) {
+    for (auto tab : (*tmp).flush()) {
+      auto [key, value, id] = tab;
+      if (id != 0 && id > tranc_id) {
+        continue;
+      }
+      sea.emplace_back(SearchItem(key, value, table_id, 0, id));
+    }
+    ++table_id;
+  }
+  return HeapIterator(sea, tranc_id);
 }
 
 HeapIterator MemTable::end() {
   // TODO Lab 2.2 MemTable 的迭代器
+  std::shared_lock<std::shared_mutex> slock1(cur_mtx);
+  std::shared_lock<std::shared_mutex> slock2(frozen_mtx);
   return HeapIterator{};
 }
 
