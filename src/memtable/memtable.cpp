@@ -325,16 +325,76 @@ HeapIterator MemTable::end() {
 
 HeapIterator MemTable::iters_preffix(const std::string &preffix,
                                      uint64_t tranc_id) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wambiguous-reversed-operator"
 
   // TODO Lab 2.3 MemTable 的前缀迭代器
+  std::shared_lock<std::shared_mutex> slock1(cur_mtx);
+  std::shared_lock<std::shared_mutex> slock2(frozen_mtx);
+  std::vector<SearchItem> sea;
+  auto it = current_table->begin_preffix(preffix);
+  auto end = current_table->end_preffix(preffix);
+  while (it != end) {
+    sea.emplace_back(
+        SearchItem(it.get_key(), it.get_value(), 0, 0, it.get_tranc_id()));
+    ++it;
+  }
 
-  return {};
+  int table_id = 1;
+
+  for (const auto &table : frozen_tables) {
+    auto it_frozen = table->begin_preffix(preffix);
+    auto end_frozen = table->end_preffix(preffix);
+    while (it_frozen != end_frozen) {
+      sea.emplace_back(SearchItem(it_frozen.get_key(), it_frozen.get_value(),
+                                  table_id, 0, it_frozen.get_tranc_id()));
+      ++it_frozen;
+    }
+    ++table_id;
+  }
+#pragma clang diagnostic pop
+  return HeapIterator(sea, tranc_id);
 }
 
 std::optional<std::pair<HeapIterator, HeapIterator>>
 MemTable::iters_monotony_predicate(
     uint64_t tranc_id, std::function<int(const std::string &)> predicate) {
   // TODO Lab 2.3 MemTable 的谓词查询迭代器起始范围
+  //这里返回两个HeapIterator，第一个应该是全推进去，第二个就是只有最后一个的
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wambiguous-reversed-operator"
+
+  // TODO Lab 2.3 MemTable 的前缀迭代器
+  std::shared_lock<std::shared_mutex> slock1(cur_mtx);
+  std::shared_lock<std::shared_mutex> slock2(frozen_mtx);
+  std::vector<SearchItem> sea;
+  auto opt_range = current_table->iters_monotony_predicate(predicate);
+  if (opt_range.has_value()) {
+    auto &[start, end] = opt_range.value();
+    for (auto tmp = start; tmp != end; ++tmp) {
+      sea.emplace_back(
+          SearchItem(tmp.get_key(), tmp.get_value(), 0, 0, tmp.get_tranc_id()));
+    }
+  }
+
+  int table_id = 1;
+
+  for (auto tmp : frozen_tables) {
+    auto opt_range = tmp->iters_monotony_predicate(predicate);
+    if (opt_range.has_value()) {
+      auto &[start, end] = opt_range.value();
+      for (auto tmp = start; tmp != end; ++tmp) {
+        sea.emplace_back(SearchItem(tmp.get_key(), tmp.get_value(), table_id, 0,
+                                    tmp.get_tranc_id()));
+      }
+      ++table_id;
+    }
+  }
+  if (!sea.empty()) {
+    return std::make_optional(std::make_pair(
+        HeapIterator(sea, table_id), HeapIterator({sea.back()}, table_id)));
+  }
+#pragma clang diagnostic pop
   return std::nullopt;
 }
 } // namespace tiny_lsm

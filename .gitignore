@@ -13,3 +13,4 @@ sdk/tonilsm/tonilsm.egg-info
 .idea/.gitignore
 book
 sdk/tinylsm
+logs/tiny_lsm.log
