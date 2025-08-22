@@ -108,7 +108,7 @@ std::string Block::get_first_key() {
 }
 
 size_t Block::get_offset_at(size_t idx) const {
-  if (idx > offsets.size()) {
+  if (idx >= offsets.size()) { // 原来是 >
     throw std::runtime_error("idx out of offsets range");
   }
   return offsets[idx];
@@ -354,11 +354,11 @@ bool Block::is_empty() const { return offsets.empty(); }
 
 BlockIterator Block::begin(uint64_t tranc_id) {
   // TODO Lab 3.2 获取begin迭代器
-  return BlockIterator(std::make_shared<Block>(this), 0, tranc_id);
+  return BlockIterator(shared_from_this(), 0, tranc_id);
 }
 
 BlockIterator Block::end() {
   // TODO Lab 3.2 获取end迭代器
-  return BlockIterator(nullptr, offsets.size(), 0);
+  return BlockIterator(shared_from_this(), offsets.size(), 0);
 }
 } // namespace tiny_lsm
