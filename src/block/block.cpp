@@ -354,11 +354,11 @@ bool Block::is_empty() const { return offsets.empty(); }
 
 BlockIterator Block::begin(uint64_t tranc_id) {
   // TODO Lab 3.2 获取begin迭代器
-  return BlockIterator(nullptr, 0, 0);
+  return BlockIterator(std::make_shared<Block>(this), 0, tranc_id);
 }
 
 BlockIterator Block::end() {
   // TODO Lab 3.2 获取end迭代器
-  return BlockIterator(nullptr, 0, 0);
+  return BlockIterator(nullptr, offsets.size(), 0);
 }
 } // namespace tiny_lsm

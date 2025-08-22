@@ -35,7 +35,7 @@ public:
   bool operator==(const BlockIterator &other) const;
   bool operator!=(const BlockIterator &other) const;
   value_type operator*() const;
-  bool is_end();
+  bool is_end() const;
 
 private:
   void update_current() const;
