@@ -4,10 +4,12 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace tiny_lsm {
 Block::Block(size_t capacity) : capacity(capacity) {}
@@ -317,7 +319,21 @@ std::optional<
     std::pair<std::shared_ptr<BlockIterator>, std::shared_ptr<BlockIterator>>>
 Block::iters_preffix(uint64_t tranc_id, const std::string &preffix) {
   // TODO Lab 3.3 获取前缀匹配的区间迭代器
-  return std::nullopt;
+  auto begin = this->begin(tranc_id);
+  while (!begin.is_end() && begin->first.compare(0, preffix.size(), preffix, 0,
+                                                 preffix.size()) < 0) {
+    ++begin;
+  }
+  auto end = begin;
+  while (!end.is_end() && end->first.compare(0, preffix.size(), preffix, 0,
+                                             preffix.size()) == 0) {
+    ++end;
+  }
+  if (begin.is_end())
+    return std::nullopt;
+  else
+    return std::pair{std::make_shared<BlockIterator>(begin),
+                     std::make_shared<BlockIterator>(end)};
 }
 
 // 返回第一个满足谓词的位置和最后一个满足谓词的位置
@@ -333,7 +349,53 @@ std::optional<
 Block::get_monotony_predicate_iters(
     uint64_t tranc_id, std::function<int(const std::string &)> predicate) {
   // TODO: Lab 3.3 使用二分查找获取满足谓词的区间迭代器
-  return std::nullopt;
+  if (offsets.empty()) {
+    return std::nullopt;
+  }
+  int64_t l = 0, r = static_cast<int64_t>(offsets.size()) - 1;
+  int64_t first = -1;
+
+  // 寻找第一个匹配项（左边界）
+  while (l <= r) {
+    int64_t m = l + (r - l) / 2;
+    int cmp = predicate(get_key_at(offsets[m]));
+    if (cmp == 0) {
+      first = m;
+      r = m - 1;
+    } else if (cmp > 0) { // 谓词为正：需要向右移动
+      l = m + 1;
+    } else { // 谓词为负：需要向左移动
+      r = m - 1;
+    }
+  }
+  if (first == -1)
+    return std::nullopt;
+
+  // 寻找最后一个匹配项（右边界的前一个）
+  int64_t last = first;
+  l = first;
+  r = static_cast<int64_t>(offsets.size()) - 1;
+  while (l <= r) {
+    int64_t m = l + (r - l) / 2;
+    int cmp = predicate(get_key_at(offsets[m]));
+    if (cmp == 0) {
+      last = m;
+      l = m + 1;
+    } else if (cmp > 0) { // 向右
+      l = m + 1;
+    } else { // 向左
+      r = m - 1;
+    }
+  }
+
+  // 返回左闭右开：[first, last+1)
+  size_t begin_idx = static_cast<size_t>(first);
+  size_t end_idx_open = static_cast<size_t>(last + 1);
+
+  return std::pair{
+      std::make_shared<BlockIterator>(shared_from_this(), begin_idx, tranc_id),
+      std::make_shared<BlockIterator>(shared_from_this(), end_idx_open,
+                                      tranc_id)};
 }
 
 Block::Entry Block::get_entry_at(size_t offset) const {

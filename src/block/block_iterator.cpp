@@ -97,12 +97,67 @@ void BlockIterator::skip_by_tranc_id() {
   // ? 现在你不需要考虑这个函数
   if (!block)
     return;
+
+  auto get_key_at_index = [&](size_t idx) -> std::string {
+    size_t off = block->get_offset_at(idx);
+    return block->get_key_at(off);
+  };
+  auto get_tid_at_index = [&](size_t idx) -> uint64_t {
+    size_t off = block->get_offset_at(idx);
+    return block->get_tranc_id_at(off);
+  };
+
   while (!is_end()) {
-    size_t offset = block->get_offset_at(current_index); // 索引 -> 偏移
-    uint64_t current_tranc_id = block->get_tranc_id_at(offset);
-    if (current_tranc_id <= tranc_id_)
-      break;
-    ++current_index;
+    if (tranc_id_ == 0) {
+      // 未开启事务：对相邻相同 key 去重，只保留每组第一个（最大 tranc_id）
+      if (current_index > 0) {
+        std::string prev_key = get_key_at_index(current_index - 1);
+        std::string cur_key = get_key_at_index(current_index);
+        if (cur_key == prev_key) {
+          // 跳过这一组剩余的重复 key
+          while (current_index < block->size() &&
+                 get_key_at_index(current_index) == prev_key) {
+            ++current_index;
+          }
+          continue; // 继续检查下一组
+        }
+      }
+      break; // 当前是这一组的第一个，保留
+    } else {
+      // 开启事务视图：每组选择首个 tranc_id <=
+      // 视图的版本；若整组不可见，跳过整组 若当前落在组内（与前一个 key
+      // 相同），先跳到下一组起点
+      if (current_index > 0) {
+        std::string prev_key = get_key_at_index(current_index - 1);
+        std::string cur_key = get_key_at_index(current_index);
+        if (cur_key == prev_key) {
+          while (current_index < block->size() &&
+                 get_key_at_index(current_index) == prev_key) {
+            ++current_index;
+          }
+          continue;
+        }
+      }
+
+      // 现在在某组的起点，扫描该组找第一个可见版本
+      std::string group_key = get_key_at_index(current_index);
+      size_t idx = current_index;
+      bool found = false;
+      while (idx < block->size() && get_key_at_index(idx) == group_key) {
+        if (get_tid_at_index(idx) <= tranc_id_) {
+          current_index = idx;
+          found = true;
+          break;
+        }
+        ++idx;
+      }
+      if (found)
+        break;
+
+      // 该组在当前视图下不可见，跳到下一组
+      current_index = idx;
+      continue;
+    }
   }
   cached_value = std::nullopt;
 }
