@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <stdexcept>
+#include <sys/types.h>
 
 namespace tiny_lsm {
 
@@ -102,6 +103,14 @@ SSTBuilder::SSTBuilder(size_t block_size, bool has_bloom) : block(block_size) {
 void SSTBuilder::add(const std::string &key, const std::string &value,
                      uint64_t tranc_id) {
   // TODO: Lab 3.5 添加键值对
+  if (first_key.empty()) { // 或者用你提到的 is_empty() 判断
+    first_key = key;
+  }
+  if (!this->block.add_entry(key, value, tranc_id, false)) {
+    this->finish_block();
+    this->block.add_entry(key, value, tranc_id, false);
+  }
+  last_key = key;
 }
 
 size_t SSTBuilder::estimated_size() const { return data.size(); }
@@ -110,12 +119,53 @@ void SSTBuilder::finish_block() {
   // TODO: Lab 3.5 构建块
   // ? 当 add
   // 函数发现当前的`block`容量超出阈值时，需要将其编码到`data`，并清空`block`
+  // 什么时候调用由add函数决定，调用则将block编码到:vector<uint8_t>，类似于BlockMeta::encode_meta_to_slice函数的实现即可。
+  size_t offset = estimated_size();
+  auto block_data = this->block.encode();
+
+  data.insert(data.end(), block_data.begin(), block_data.end());
+
+  meta_entries.emplace_back(
+      BlockMeta(offset, this->block.get_first_key(), last_key));
+
+  block = Block(block_size);
 }
 
 std::shared_ptr<SST>
 SSTBuilder::build(size_t sst_id, const std::string &path,
                   std::shared_ptr<BlockCache> block_cache) {
   // TODO 3.5 构建一个SST
-  return nullptr;
+  //大概只能用create_sst_with_meta_only来构建？其他的暂时没有，先随便写写吧
+  this->finish_block();
+  auto sst = std::make_shared<SST>();
+
+  sst->sst_id = sst_id;
+  sst->first_key = this->first_key;
+  sst->last_key = this->last_key;
+  sst->meta_entries = std::move(this->meta_entries);
+  sst->block_cache = block_cache;
+  sst->bloom_filter = this->bloom_filter;
+  sst->min_tranc_id_ = this->min_tranc_id_;
+  sst->max_tranc_id_ = this->max_tranc_id_;
+
+  sst->meta_block_offset = this->data.size();
+  sst->bloom_offset = this->data.size() + this->meta_entries.size();
+
+  std::vector<uint8_t> res;
+
+  res.insert(res.end(), this->data.begin(), this->data.end());
+
+  std::vector<uint8_t> temp;
+  BlockMeta().encode_meta_to_slice(meta_entries, temp);
+  res.insert(res.end(), temp.begin(), temp.end());
+
+  uint32_t meta_offset = this->data.size();
+  const uint8_t *start_ptr = reinterpret_cast<const uint8_t *>(&meta_offset);
+  const uint8_t *end_ptr = start_ptr + sizeof(uint32_t);
+  res.insert(res.end(), start_ptr, end_ptr);
+
+  sst->file.create_and_write(path, res);
+
+  return sst;
 }
 } // namespace tiny_lsm
