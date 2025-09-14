@@ -1,8 +1,10 @@
 #include "../../include/sst/sst_iterator.h"
 #include "../../include/sst/sst.h"
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 
 namespace tiny_lsm {
 
@@ -39,10 +41,47 @@ void SstIterator::set_block_it(std::shared_ptr<BlockIterator> it) {
 
 void SstIterator::seek_first() {
   // TODO: Lab 3.6 将迭代器定位到第一个key
+  if (!m_sst || m_sst->num_blocks() == 0) {
+    m_block_it = nullptr;
+    return;
+  }
+
+  m_block_idx = 0;
+  auto block = m_sst->read_block(m_block_idx);
+  m_block_it = std::make_shared<BlockIterator>(block, 0, max_tranc_id_);
 }
 
 void SstIterator::seek(const std::string &key) {
   // TODO: Lab 3.6 将迭代器定位到指定key的位置
+  if (!m_sst) {
+    m_block_it = nullptr;
+    return;
+  }
+
+  try {
+    m_block_idx = m_sst->find_block_idx(key);
+    if (m_block_idx == -1 || m_block_idx >= m_sst->num_blocks()) {
+      // 置为 end
+      m_block_it = nullptr;
+      m_block_idx = m_sst->num_blocks();
+      return;
+    }
+    auto block = m_sst->read_block(m_block_idx);
+    if (!block) {
+      m_block_it = nullptr;
+      return;
+    }
+    m_block_it = std::make_shared<BlockIterator>(block, key, max_tranc_id_);
+    if (m_block_it->is_end()) {
+      // block 中找不到
+      m_block_idx = m_sst->num_blocks();
+      m_block_it = nullptr;
+      return;
+    }
+  } catch (const std::exception &) {
+    m_block_it = nullptr;
+    return;
+  }
 }
 
 std::string SstIterator::key() {
@@ -61,22 +100,57 @@ std::string SstIterator::value() {
 
 BaseIterator &SstIterator::operator++() {
   // TODO: Lab 3.6 实现迭代器自增
+  if (!m_block_it) { // 添加空指针检查
+    return *this;
+  }
+  ++(*m_block_it);
+  if (m_block_it->is_end()) {
+    m_block_idx++;
+    if (m_block_idx < m_sst->num_blocks()) {
+      // 读取下一个block
+      auto next_block = m_sst->read_block(m_block_idx);
+      BlockIterator new_blk_it(next_block, 0, max_tranc_id_);
+      (*m_block_it) = new_blk_it;
+    } else {
+      // 没有下一个block
+      m_block_it = nullptr;
+    }
+  }
   return *this;
 }
 
 bool SstIterator::operator==(const BaseIterator &other) const {
   // TODO: Lab 3.6 实现迭代器比较
-  return false;
+  if (other.get_type() != IteratorType::SstIterator) {
+    return false;
+  }
+  auto other2 = dynamic_cast<const SstIterator &>(other);
+  if (m_sst != other2.m_sst || m_block_idx != other2.m_block_idx) {
+    return false;
+  }
+
+  if (!m_block_it && !other2.m_block_it) {
+    return true;
+  }
+
+  if (!m_block_it || !other2.m_block_it) {
+    return false;
+  }
+
+  return *m_block_it == *other2.m_block_it;
 }
 
 bool SstIterator::operator!=(const BaseIterator &other) const {
   // TODO: Lab 3.6 实现迭代器比较
-  return false;
+  return !(*this == other);
 }
 
 SstIterator::value_type SstIterator::operator*() const {
   // TODO: Lab 3.6 实现迭代器解引用
-  return {};
+  if (!m_block_it) {
+    throw std::runtime_error("Iterator is invalid");
+  }
+  return (**m_block_it);
 }
 
 IteratorType SstIterator::get_type() const { return IteratorType::SstIterator; }
