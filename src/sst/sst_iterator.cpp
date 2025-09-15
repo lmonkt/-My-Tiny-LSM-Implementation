@@ -1,9 +1,11 @@
 #include "../../include/sst/sst_iterator.h"
 #include "../../include/sst/sst.h"
 #include <cstddef>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace tiny_lsm {
@@ -16,7 +18,74 @@ std::optional<std::pair<SstIterator, SstIterator>> sst_iters_monotony_predicate(
     std::shared_ptr<SST> sst, uint64_t tranc_id,
     std::function<int(const std::string &)> predicate) {
   // TODO: Lab 3.7 实现谓词查询功能
-  return {};
+  if (!sst || sst->num_blocks() == 0) {
+    return std::nullopt;
+  }
+
+  const int n = static_cast<int>(sst->num_blocks());
+  auto first_key_of = [&](int i) -> const std::string & {
+    return sst->meta_entries[i].first_key;
+  };
+  auto last_key_of = [&](int i) -> const std::string & {
+    return sst->meta_entries[i].last_key;
+  };
+
+  int l = 0, r = n - 1, first = -1;
+  while (l <= r) {
+    int m = l + (r - l) / 2;
+    if (predicate(last_key_of(m)) > 0) {
+      l = m + 1;
+      continue;
+    }
+
+    if (predicate(first_key_of(m)) < 0) {
+      r = m - 1;
+      continue;
+    }
+    first = m;
+    r = m - 1;
+  }
+  if (first == -1) {
+    return std::nullopt;
+  }
+
+  int last = first;
+  l = first;
+  r = n - 1;
+  while (l <= r) {
+    int m = l + (r - l) / 2;
+    if (predicate(last_key_of(m)) > 0) {
+      l = m + 1;
+      continue;
+    }
+
+    if (predicate(first_key_of(m)) < 0) {
+      r = m - 1;
+      continue;
+    }
+    last = m;
+    l = m + 1;
+  }
+
+  auto first_block =
+      sst->read_block(first)->get_monotony_predicate_iters(tranc_id, predicate);
+  if (!first_block.has_value()) {
+    return std::nullopt;
+  }
+  auto last_block =
+      sst->read_block(last)->get_monotony_predicate_iters(tranc_id, predicate);
+  if (!last_block.has_value()) {
+    return std::nullopt;
+  }
+
+  SstIterator it_begin(sst, tranc_id);
+  it_begin.m_block_idx = first;
+  it_begin.m_block_it = first_block->first;
+
+  SstIterator it_end(sst, tranc_id);
+  it_end.m_block_idx = last;
+  it_end.m_block_it = last_block->second;
+  return std::make_pair(it_begin, it_end);
 }
 
 SstIterator::SstIterator(std::shared_ptr<SST> sst, uint64_t tranc_id)
