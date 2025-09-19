@@ -9,6 +9,8 @@
 #include "spdlog/spdlog.h"
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -55,6 +57,11 @@ uint64_t LSMEngine::put(const std::string &key, const std::string &value,
   // ? 由于 put 操作可能触发 flush
   // ? 如果触发了 flush 则返回新刷盘的 sst 的 id
   // ? 在没有实现  flush 的情况下，你返回 0即可
+  memtable.put(key, value, tranc_id);
+  if (memtable.get_frozen_size() >=
+      TomlConfig::getInstance().getLsmPerMemSizeLimit()) {
+    return this->flush();
+  }
   return 0;
 }
 
@@ -65,7 +72,11 @@ uint64_t LSMEngine::put_batch(
   // ? 由于 put 操作可能触发 flush
   // ? 如果触发了 flush 则返回新刷盘的 sst 的 id
   // ? 在没有实现  flush 的情况下，你返回 0即可
-  return 0;
+  uint64_t res = 0;
+  for (auto &[k, v] : kvs) {
+    res = this->put(k, v, tranc_id);
+  }
+  return res;
 }
 uint64_t LSMEngine::remove(const std::string &key, uint64_t tranc_id) {
   // TODO: Lab 4.1 删除
@@ -73,7 +84,7 @@ uint64_t LSMEngine::remove(const std::string &key, uint64_t tranc_id) {
   // ? 由于 put 操作可能触发 flush
   // ? 如果触发了 flush 则返回新刷盘的 sst 的 id
   // ? 在没有实现  flush 的情况下，你返回 0即可
-  return 0;
+  return put(key, "", tranc_id);
 }
 
 uint64_t LSMEngine::remove_batch(const std::vector<std::string> &keys,
@@ -83,7 +94,11 @@ uint64_t LSMEngine::remove_batch(const std::vector<std::string> &keys,
   // ? 由于 put 操作可能触发 flush
   // ? 如果触发了 flush 则返回新刷盘的 sst 的 id
   // ? 在没有实现  flush 的情况下，你返回 0即可
-  return 0;
+  uint64_t res = 0;
+  for (auto &k : keys) {
+    res = this->put(k, "", tranc_id);
+  }
+  return res;
 }
 
 void LSMEngine::clear() {
@@ -110,7 +125,21 @@ void LSMEngine::clear() {
 
 uint64_t LSMEngine::flush() {
   // TODO: Lab 4.1 刷盘形成sst文件
-  return 0;
+  std::unique_lock<std::shared_mutex> lock(ssts_mtx);
+  auto sst_path = this->get_sst_path(next_sst_id, 0);
+  size_t block_size;
+  if (level_sst_ids.find(0) == level_sst_ids.end()) {
+    level_sst_ids[0] = std::deque<size_t>();
+    block_size = TomlConfig::getInstance().getLsmBlockSize();
+  } else {
+    block_size = ssts[level_sst_ids[0].back()]->num_blocks();
+  }
+  SSTBuilder tmp(block_size, true);
+  auto sst_tmp = memtable.flush_last(tmp, data_dir, next_sst_id, block_cache);
+  tmp.build(next_sst_id, sst_path, block_cache);
+  level_sst_ids[0].emplace_front(next_sst_id);
+  ssts[next_sst_id] = sst_tmp;
+  return next_sst_id++;
 }
 
 std::string LSMEngine::get_sst_path(size_t sst_id, size_t target_level) {
