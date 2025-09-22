@@ -15,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -24,30 +25,192 @@ namespace tiny_lsm {
 LSMEngine::LSMEngine(std::string path) : data_dir(path) {
   // 初始化日志
   init_spdlog_file();
-
   // TODO: Lab 4.2 引擎初始化
-}
+  if (!std::filesystem::exists(data_dir)) {
+    if (!std::filesystem::create_directories(data_dir)) {
+      SPDLOG_ERROR("Failed to create data directory: {}", data_dir);
+      throw std::runtime_error("Failed to create data directory: " + data_dir);
+    }
+    SPDLOG_INFO("Created data directory: {}", data_dir);
+  } else if (!std::filesystem::is_directory(data_dir)) {
+    SPDLOG_ERROR("Data path exists but is not a directory: {}", data_dir);
+    throw std::runtime_error("Data path is not a directory: " + data_dir);
+  }
+  // 初始化 BlockCache（容量与K值从配置读取）
+  this->block_cache = std::make_shared<BlockCache>(
+      TomlConfig::getInstance().getLsmBlockCacheCapacity(),
+      TomlConfig::getInstance().getLsmBlockCacheK());
+  cur_max_level = 0;
 
+  auto is_digits = [](const std::string &sst_id_string) -> bool {
+    if (sst_id_string.empty())
+      return false;
+    for (char c : sst_id_string) {
+      if (!std::isdigit(c))
+        return false;
+    }
+    return true;
+  };
+  // 可选：预初始化 L0 的容器
+  level_sst_ids[0] = std::deque<size_t>();
+  // 遍历目录中的每个条目
+  bool any_sst_found = false;
+  for (const auto &entry : std::filesystem::directory_iterator(data_dir)) {
+    if (entry.is_regular_file()) { // 确保是文件
+      std::string filename = entry.path().filename().string();
+      size_t sst_id = 0;
+
+      // 检查文件名是否以 "sst_" 开头
+      if (filename.rfind("sst_", 0) == 0 && filename.size() > 37) {
+        // 形如: sst_<32位数字>.<level>
+        // 检查分隔符位置
+        if (filename.size() <= 37 || filename[36] != '.') {
+          spdlog::warn("Skip file (invalid sst name format, missing '.'): {}",
+                       filename);
+          continue;
+        }
+        std::string suffix = filename.substr(4, 32); // 32位数字ID
+        std::string level = filename.substr(37);     // level 数字
+
+        if (is_digits(suffix)) {
+          try {
+            // 先转为 unsigned long long，再赋给 size_t
+            sst_id = static_cast<size_t>(std::stoull(suffix));
+            next_sst_id = std::max(next_sst_id, sst_id);
+
+            if (!is_digits(level)) {
+              spdlog::warn("Skip file (invalid level digits): {}", filename);
+              continue;
+            }
+            size_t level_id = static_cast<size_t>(std::stoull(level));
+            cur_max_level = std::max(cur_max_level, level_id);
+            // 插入到对应 level 的 deque（operator[] 会自动初始化空容器）
+            level_sst_ids[level_id].emplace_back(sst_id);
+
+            // 使用静态工厂并传入右值 FileObj（触发移动语义，避免拷贝）
+            ssts[sst_id] =
+                SST::open(sst_id, FileObj::open(entry.path().string(), false),
+                          block_cache);
+            any_sst_found = true;
+          } catch (const std::invalid_argument &e) {
+            std::cerr << "Invalid number format in filename: " << filename
+                      << std::endl;
+          } catch (const std::out_of_range &e) {
+            std::cerr << "Number in filename is out of range: " << filename
+                      << std::endl;
+          }
+        } else {
+          std::cout << "File: " << filename << " → Suffix is not numeric: '"
+                    << suffix << "'" << std::endl;
+        }
+      } else {
+        // 非 sst_ 开头或长度不匹配的文件，直接跳过
+        continue;
+      }
+    } else {
+      std::cerr << "不是文件：" << entry.path().string() << std::endl;
+    }
+  }
+  // 将 next_sst_id 设为当前已存在最大ID的下一个，仅在发现过 sst 文件时自增
+  if (any_sst_found) {
+    next_sst_id++;
+  }
+  // 为保证遍历/后续逻辑的确定性：
+  // - Level-0：保持“最新优先”，即按 sst_id 从大到小排序（近似创建时间新→旧）
+  // - 其他层(L1+)：同层内区间不重叠，按 first_key
+  // 升序排序，更利于范围扫描与二分查找
+  for (auto &kv : level_sst_ids) {
+    auto level = kv.first;
+    auto &dq = kv.second;
+    if (dq.empty())
+      continue;
+    if (level == 0) {
+      std::sort(dq.begin(), dq.end(), [](size_t a, size_t b) {
+        return a > b; // 新的 sst_id 更大，排前面
+      });
+    } else {
+      std::sort(dq.begin(), dq.end(), [&](size_t a, size_t b) {
+        const auto &sa = ssts[a];
+        const auto &sb = ssts[b];
+        // 以 first_key 升序排列；若异常情况缺少元数据，退化为按 id 升序
+        if (sa && sb)
+          return sa->get_first_key() < sb->get_first_key();
+        return a < b;
+      });
+    }
+  }
+}
 LSMEngine::~LSMEngine() = default;
 
 std::optional<std::pair<std::string, uint64_t>>
 LSMEngine::get(const std::string &key, uint64_t tranc_id) {
   // TODO: Lab 4.2 查询
-
-  return std::nullopt;
+  auto skplit = this->memtable.get(key, tranc_id);
+  if (skplit.is_valid()) {
+    if (skplit.get_value().empty()) {
+      return std::nullopt;
+    }
+    return std::make_pair(skplit.get_value(), skplit.get_tranc_id());
+  }
+  std::shared_lock<std::shared_mutex> rlock1(ssts_mtx);
+  return this->sst_get_(key, tranc_id);
 }
 
 std::vector<
     std::pair<std::string, std::optional<std::pair<std::string, uint64_t>>>>
 LSMEngine::get_batch(const std::vector<std::string> &keys, uint64_t tranc_id) {
   // TODO: Lab 4.2 批量查询
-
-  return {};
+  std::vector<
+      std::pair<std::string, std::optional<std::pair<std::string, uint64_t>>>>
+      res;
+  for (auto &k : keys) {
+    auto v = this->get(k, tranc_id);
+    res.emplace_back(k, v);
+  }
+  return res;
 }
 
 std::optional<std::pair<std::string, uint64_t>>
 LSMEngine::sst_get_(const std::string &key, uint64_t tranc_id) {
   // TODO: Lab 4.2 sst 内部查询
+  for (auto &kv : level_sst_ids) {
+    auto level = kv.first;
+    auto &dq = kv.second;
+    if (dq.empty())
+      continue;
+    if (level == 0) {
+      for (auto &sst_ids : dq) {
+        auto sstits = ssts[sst_ids]->get(key, tranc_id);
+        if (sstits.is_valid()) {
+          if (sstits->second.empty()) {
+            return std::nullopt;
+          }
+          return std::make_pair(sstits->second, sstits.get_tranc_id());
+        }
+      }
+    } else {
+      int l = 0, r = static_cast<int>(dq.size()) - 1, pos = -1;
+      while (l <= r) {
+        int m = l + (r - l) / 2;
+        const auto &first_key = ssts[dq[m]]->get_first_key();
+        if (first_key <= key) {
+          pos = m;
+          l = m + 1;
+        } else {
+          r = m - 1;
+        }
+      }
+      if (pos != -1) {
+        auto sstits = ssts[dq[pos]]->get(key, tranc_id);
+        if (sstits.is_valid()) {
+          if (sstits->second.empty()) {
+            return std::nullopt;
+          }
+          return std::make_pair(sstits->second, sstits.get_tranc_id());
+        }
+      }
+    }
+  }
   return std::nullopt;
 }
 
@@ -127,16 +290,14 @@ uint64_t LSMEngine::flush() {
   // TODO: Lab 4.1 刷盘形成sst文件
   std::unique_lock<std::shared_mutex> lock(ssts_mtx);
   auto sst_path = this->get_sst_path(next_sst_id, 0);
-  size_t block_size;
-  if (level_sst_ids.find(0) == level_sst_ids.end()) {
-    level_sst_ids[0] = std::deque<size_t>();
-    block_size = TomlConfig::getInstance().getLsmBlockSize();
-  } else {
-    block_size = ssts[level_sst_ids[0].back()]->num_blocks();
-  }
+
+  size_t block_size = TomlConfig::getInstance().getLsmBlockSize();
+
   SSTBuilder tmp(block_size, true);
-  auto sst_tmp = memtable.flush_last(tmp, data_dir, next_sst_id, block_cache);
-  tmp.build(next_sst_id, sst_path, block_cache);
+  auto sst_tmp = memtable.flush_last(tmp, sst_path, next_sst_id, block_cache);
+  if (!std::filesystem::exists(sst_path)) {
+    tmp.build(next_sst_id, sst_path, block_cache);
+  }
   level_sst_ids[0].emplace_front(next_sst_id);
   ssts[next_sst_id] = sst_tmp;
   return next_sst_id++;
