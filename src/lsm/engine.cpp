@@ -15,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -300,7 +301,22 @@ uint64_t LSMEngine::flush() {
   }
   level_sst_ids[0].emplace_front(next_sst_id);
   ssts[next_sst_id] = sst_tmp;
-  return next_sst_id++;
+  uint64_t flushed_sst_id = next_sst_id++;
+
+  // 检查是否需要触发 compact
+  // 从 L0 开始检查每一层是否超过阈值
+  size_t ratio = TomlConfig::getInstance().getLsmSstLevelRatio();
+  for (size_t level = 0; level <= cur_max_level; ++level) {
+    if (level_sst_ids[level].size() >= ratio) {
+      SPDLOG_INFO("Level {} has {} SSTs, triggering compaction (threshold: {})",
+                  level, level_sst_ids[level].size(), ratio);
+      full_compact(level);
+      // compact 后可能会影响更高层，但 full_compact 内部已经递归处理了
+      break; // 只处理第一个超过阈值的层
+    }
+  }
+
+  return flushed_sst_id;
 }
 
 std::string LSMEngine::get_sst_path(size_t sst_id, size_t target_level) {
@@ -331,20 +347,105 @@ Level_Iterator LSMEngine::end() {
 void LSMEngine::full_compact(size_t src_level) {
   // TODO: Lab 4.5 负责完成整个 full compact
   // ? 你可能需要控制`Compact`流程需要递归地进行
+  std::unique_lock<std::shared_mutex> wlock(ssts_mtx);
+  int ratio = TomlConfig::getInstance().getLsmSstLevelRatio();
+  size_t high_level = src_level + 1;
+  std::vector<size_t> low(level_sst_ids[src_level].begin(),
+                          level_sst_ids[src_level].end());
+  std::vector<size_t> high(level_sst_ids[high_level].begin(),
+                           level_sst_ids[high_level].end());
+
+  if (high.size() >= ratio)
+    full_compact(high_level);
+  std::vector<std::shared_ptr<SST>> res;
+  if (src_level == 0) {
+    res = full_l0_l1_compact(low, high);
+  } else {
+    res = full_common_compact(low, high, high_level);
+  }
+
+  auto clear_level = [&](size_t level) {
+    for (auto i : level_sst_ids[level]) {
+      ssts[i]->del_sst();
+    }
+    level_sst_ids[level].clear();
+  };
+  clear_level(src_level);
+  clear_level(high_level);
+
+  std::deque<size_t> level_deque;
+  for (auto &sst_point : res) {
+    auto sst_id = sst_point->get_sst_id();
+    level_deque.emplace_back(sst_id);
+    ssts[sst_id] = sst_point;
+  }
+  level_sst_ids[high_level] = level_deque;
 }
 
 std::vector<std::shared_ptr<SST>>
 LSMEngine::full_l0_l1_compact(std::vector<size_t> &l0_ids,
                               std::vector<size_t> &l1_ids) {
   // TODO: Lab 4.5 负责完成 l0 和 l1 的 full compact
-  return {};
+  if (l0_ids.size() == 0)
+    return {};
+  std::vector<SearchItem> si_tmp;
+  size_t max_trancid;
+  for (size_t &i : l0_ids) {
+    {
+      max_trancid = std::max(max_trancid, ssts[i]->get_tranc_id_range().second);
+      auto sst_it = ssts[i]->begin(0);
+      while (sst_it != ssts[i]->end()) {
+        si_tmp.emplace_back(sst_it->first, sst_it->second, i, 0,
+                            sst_it.get_tranc_id());
+        ++sst_it;
+      }
+    }
+  }
+  HeapIterator heap_it(si_tmp, max_trancid);
+
+  std::vector<std::shared_ptr<SST>> sst_vec;
+  max_trancid = 0;
+  for (size_t &i : l1_ids) {
+    max_trancid = std::max(max_trancid, ssts[i]->get_tranc_id_range().second);
+    sst_vec.emplace_back(&ssts[i]);
+  }
+  ConcactIterator con_it(sst_vec, max_trancid);
+
+  TwoMergeIterator tw_it(
+      std::make_shared<BaseIterator>(heap_it),
+      std::make_shared<BaseIterator>(con_it),
+      std::max(heap_it.get_tranc_id(), con_it.get_tranc_id()));
+  return this->gen_sst_from_iter(tw_it, get_sst_size(1), 1);
 }
 
 std::vector<std::shared_ptr<SST>>
 LSMEngine::full_common_compact(std::vector<size_t> &lx_ids,
                                std::vector<size_t> &ly_ids, size_t level_y) {
   // TODO: Lab 4.5 负责完成其他相邻 level 的 full compact
+  if (lx_ids.size() == 0)
+    return {};
 
+  std::vector<std::shared_ptr<SST>> sst_vec;
+  size_t max_trancid = 0;
+  for (size_t &i : ly_ids) {
+    max_trancid = std::max(max_trancid, ssts[i]->get_tranc_id_range().second);
+    sst_vec.emplace_back(&ssts[i]);
+  }
+  ConcactIterator con_it1(sst_vec, max_trancid);
+
+  sst_vec.clear();
+  max_trancid = 0;
+  for (size_t &i : ly_ids) {
+    max_trancid = std::max(max_trancid, ssts[i]->get_tranc_id_range().second);
+    sst_vec.emplace_back(&ssts[i]);
+  }
+  ConcactIterator con_it2(sst_vec, max_trancid);
+
+  TwoMergeIterator tw_it(
+      std::make_shared<BaseIterator>(con_it1),
+      std::make_shared<BaseIterator>(con_it2),
+      std::max(con_it1.get_tranc_id(), con_it2.get_tranc_id()));
+  return this->gen_sst_from_iter(tw_it, get_sst_size(level_y), level_y);
   return {};
 }
 
@@ -352,8 +453,57 @@ std::vector<std::shared_ptr<SST>>
 LSMEngine::gen_sst_from_iter(BaseIterator &iter, size_t target_sst_size,
                              size_t target_level) {
   // TODO: Lab 4.5 实现从迭代器构造新的 SST
+  if (iter.get_type() != IteratorType::TwoMergeIterator)
+    throw std::runtime_error("无效的迭代器");
+  std::vector<std::shared_ptr<SST>> res;
 
-  return {};
+  auto block_size = TomlConfig::getInstance().getLsmBlockSize();
+  SSTBuilder builder(block_size, true);
+  std::string last_key;
+  bool has_last = false;
+
+  while (!iter.is_end() && iter.is_valid()) {
+    auto kv = *iter;
+    const auto &k = kv.first;
+    const auto &v = kv.second;
+
+    // 去重（防御）
+    if (has_last && k == last_key) {
+      ++iter;
+      continue;
+    }
+
+    // 估算写入后大小
+    size_t next_est =
+        builder.estimated_size() + k.size() + v.size() + 32; // 粗估开销
+
+    // 如果会超并且当前 builder 已经有内容，则先落地当前 SST
+    if (builder.estimated_size() > 0 && next_est > target_sst_size) {
+      auto path = get_sst_path(next_sst_id, target_level);
+      auto sst = builder.build(next_sst_id, path, block_cache);
+      res.emplace_back(sst);
+      ++next_sst_id;
+      // 新建 builder
+      builder = SSTBuilder(block_size, true);
+    }
+
+    // 写入当前 kv
+    builder.add(k, v, iter.get_tranc_id());
+    last_key = k;
+    has_last = true;
+
+    ++iter;
+  }
+
+  // 收尾
+  if (builder.estimated_size() > 0) {
+    auto path = get_sst_path(next_sst_id, target_level);
+    auto sst = builder.build(next_sst_id, path, block_cache);
+    res.emplace_back(sst);
+    ++next_sst_id;
+  }
+
+  return res;
 }
 
 size_t LSMEngine::get_sst_size(size_t level) {
