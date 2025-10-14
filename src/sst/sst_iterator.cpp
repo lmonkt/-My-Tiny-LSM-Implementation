@@ -249,15 +249,18 @@ SstIterator::merge_sst_iterator(std::vector<SstIterator> iter_vec,
     return std::make_pair(HeapIterator(), HeapIterator());
   }
 
-  HeapIterator it_begin;
+  // Collect SearchItem entries into a vector and construct HeapIterator via
+  // its vector constructor so that `current` gets properly initialized.
+  std::vector<SearchItem> items;
   for (auto &iter : iter_vec) {
     while (iter.is_valid() && !iter.is_end()) {
-      it_begin.items.emplace(
-          iter.key(), iter.value(), -iter.m_sst->get_sst_id(), 0,
-          tranc_id); // ! 此处的level暂时没有作用, 都作用于同一层的比较
+      items.emplace_back(iter.key(), iter.value(),
+                         -static_cast<int>(iter.m_sst->get_sst_id()), 0,
+                         tranc_id);
       ++iter;
     }
   }
+  HeapIterator it_begin(std::move(items), tranc_id);
   return std::make_pair(it_begin, HeapIterator());
 }
 } // namespace tiny_lsm

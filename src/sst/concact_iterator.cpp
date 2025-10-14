@@ -11,18 +11,34 @@ ConcactIterator::ConcactIterator(std::vector<std::shared_ptr<SST>> ssts,
   }
 }
 
-BaseIterator &ConcactIterator::operator++() { return *this; }
+BaseIterator &ConcactIterator::operator++() {
+  ++cur_iter;
+
+  if (cur_iter.is_end() || !cur_iter.is_valid()) {
+    cur_idx++;
+    if (cur_idx < ssts.size()) {
+      cur_iter = ssts[cur_idx]->begin(max_tranc_id_);
+    } else {
+      cur_iter = SstIterator(nullptr, max_tranc_id_);
+    }
+  }
+  return *this;
+}
 
 bool ConcactIterator::operator==(const BaseIterator &other) const {
-  return false;
+  if (other.get_type() != IteratorType::ConcactIterator) {
+    return false;
+  }
+  auto other2 = dynamic_cast<const ConcactIterator &>(other);
+  return other2.cur_iter == cur_iter;
 }
 
 bool ConcactIterator::operator!=(const BaseIterator &other) const {
-  return false;
+  return !(*this == other);
 }
 
 ConcactIterator::value_type ConcactIterator::operator*() const {
-  return value_type();
+  return *cur_iter;
 }
 
 IteratorType ConcactIterator::get_type() const {
@@ -39,7 +55,9 @@ bool ConcactIterator::is_valid() const {
   return !cur_iter.is_end() && cur_iter.is_valid();
 }
 
-ConcactIterator::pointer ConcactIterator::operator->() const { return nullptr; }
+ConcactIterator::pointer ConcactIterator::operator->() const {
+  return cur_iter.operator->();
+}
 
 std::string ConcactIterator::key() { return cur_iter.key(); }
 
