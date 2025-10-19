@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -85,6 +86,24 @@ LSMEngine::LSMEngine(std::string path) : data_dir(path) {
       spdlog::info("LSMEngine--"
                    "Loaded SST: {} successfully!",
                    sst_path);
+      
+      // Export loaded SST for debugging (only if LSM_EXPORT_SST env var is set)
+      if (std::getenv("LSM_EXPORT_SST")) {
+        try {
+          std::filesystem::path exports_dir =
+              std::filesystem::path(path).parent_path() / "exports";
+          std::stringstream ss_exp;
+          ss_exp << exports_dir.string() << "/sst_" << std::setfill('0')
+                 << std::setw(32) << sst_id << "." << level << ".loaded.txt";
+          spdlog::debug("LSMEngine--Exporting loaded SST to {}", ss_exp.str());
+          sst->export_to_txt(ss_exp.str(), level, {});
+        } catch (const std::exception &e) {
+          spdlog::warn("LSMEngine--Failed to export loaded SST: {}", e.what());
+        } catch (...) {
+          spdlog::warn("LSMEngine--Failed to export loaded SST: unknown error");
+        }
+      }
+      
       ssts[sst_id] = sst;
 
       level_sst_ids[level].push_back(sst_id);
@@ -498,6 +517,21 @@ uint64_t LSMEngine::flush() {
   // 5. 更新内存索引
   ssts[new_sst_id] = new_sst;
 
+  // Export the newly created SST for debugging (only if LSM_EXPORT_SST env var is set)
+  if (std::getenv("LSM_EXPORT_SST")) {
+    try {
+      std::filesystem::path exports_dir =
+          std::filesystem::path(data_dir).parent_path() / "exports";
+      std::stringstream ss;
+      ss << exports_dir.string() << "/sst_" << std::setfill('0') << std::setw(32)
+         << new_sst_id << "." << 0 << ".txt";
+      spdlog::debug("LSMEngine--Exporting flushed SST to {}", ss.str());
+      new_sst->export_to_txt(ss.str(), 0, {});
+    } catch (...) {
+      spdlog::warn("LSMEngine--Failed to export flushed SST");
+    }
+  }
+
   // 6. 更新 sst_ids
   level_sst_ids[0].push_front(new_sst_id);
 
@@ -561,6 +595,29 @@ void LSMEngine::full_compact(size_t src_level) {
   } else {
     new_ssts = full_common_compact(lx_ids, ly_ids, src_level + 1);
   }
+  
+  // Export newly generated SSTs for debugging (only if LSM_EXPORT_SST env var is set)
+  if (std::getenv("LSM_EXPORT_SST")) {
+    try {
+      std::filesystem::path exports_dir =
+          std::filesystem::path(data_dir).parent_path() / "exports";
+      for (auto &new_sst : new_ssts) {
+        std::stringstream ss;
+        ss << exports_dir.string() << "/sst_" << std::setfill('0')
+           << std::setw(32) << new_sst->get_sst_id() << "." << (src_level + 1)
+           << ".txt";
+        // Combine sources from lx and ly
+        std::vector<size_t> sources;
+        sources.insert(sources.end(), lx_ids.begin(), lx_ids.end());
+        sources.insert(sources.end(), ly_ids.begin(), ly_ids.end());
+        spdlog::debug("LSMEngine--Exporting compacted SST to {}", ss.str());
+        new_sst->export_to_txt(ss.str(), src_level + 1, sources);
+      }
+    } catch (...) {
+      spdlog::warn("LSMEngine--Failed to export compacted SSTs");
+    }
+  }
+  
   // 完成 compact 后移除旧的sst记录
   for (auto &old_sst_id : old_level_id_x) {
     ssts[old_sst_id]->del_sst();
@@ -606,8 +663,7 @@ LSMEngine::full_l0_l1_compact(std::vector<size_t> &l0_ids,
   // l0 的sst之间的key有重叠, 需要合并
   auto [l0_begin, l0_end] = SstIterator::merge_sst_iterator(l0_iters, 0);
 
-  std::shared_ptr<HeapIterator> l0_begin_ptr = std::make_shared<HeapIterator>();
-  *l0_begin_ptr = l0_begin;
+  std::shared_ptr<HeapIterator> l0_begin_ptr = std::make_shared<HeapIterator>(std::move(l0_begin));
 
   std::shared_ptr<ConcactIterator> old_l1_begin_ptr =
       std::make_shared<ConcactIterator>(l1_ssts, 0);
@@ -656,9 +712,10 @@ LSMEngine::gen_sst_from_iter(BaseIterator &iter, size_t target_sst_size,
   std::vector<std::shared_ptr<SST>> new_ssts;
   auto new_sst_builder =
       SSTBuilder(TomlConfig::getInstance().getLsmBlockSize(), true);
+  
   while (iter.is_valid() && !iter.is_end()) {
-
-    new_sst_builder.add((*iter).first, (*iter).second, 0);
+    auto kv = *iter;
+    new_sst_builder.add(kv.first, kv.second, 0);
     ++iter;
 
     if (new_sst_builder.estimated_size() >= target_sst_size) {
@@ -676,6 +733,8 @@ LSMEngine::gen_sst_from_iter(BaseIterator &iter, size_t target_sst_size,
                                    true); // 重置builder
     }
   }
+  
+  // 构建剩余的 entries
   if (new_sst_builder.estimated_size() > 0) {
     size_t sst_id = next_sst_id++; // TODO: 后续优化并发性
     std::string sst_path = get_sst_path(sst_id, target_level);

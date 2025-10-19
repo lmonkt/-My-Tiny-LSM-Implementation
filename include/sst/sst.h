@@ -99,6 +99,14 @@ public:
   SstIterator end();
 
   std::pair<uint64_t, uint64_t> get_tranc_id_range() const;
+
+  // Export SST contents to a human-readable text file at out_path.
+  // out_path: full path to output .txt file
+  // level: SST level (for metadata)
+  // sources: optional list of source SST ids that were merged to produce this
+  // SST; empty for flush-from-memtable
+  void export_to_txt(const std::string &out_path, size_t level,
+                     const std::vector<size_t> &sources = {});
 };
 
 class SSTBuilder {

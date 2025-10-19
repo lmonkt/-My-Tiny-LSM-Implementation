@@ -6,7 +6,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iomanip>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -202,6 +205,71 @@ std::pair<uint64_t, uint64_t> SST::get_tranc_id_range() const {
   return std::make_pair(min_tranc_id_, max_tranc_id_);
 }
 
+void SST::export_to_txt(const std::string &out_path, size_t level,
+                        const std::vector<size_t> &sources) {
+  // Ensure parent directory exists
+  try {
+    std::filesystem::path p(out_path);
+    if (p.has_parent_path()) {
+      std::filesystem::create_directories(p.parent_path());
+    }
+  } catch (...) {
+    // ignore directory creation errors
+  }
+
+  std::ofstream ofs(out_path, std::ios::out | std::ios::trunc);
+  if (!ofs.is_open()) {
+    return;
+  }
+
+  // write header metadata
+  ofs << "sst_id:\t" << sst_id << "\n";
+  ofs << "level:\t" << level << "\n";
+  ofs << "file_size:\t" << sst_size() << "\n";
+  ofs << "num_blocks:\t" << num_blocks() << "\n";
+  ofs << "first_key:\t" << first_key << "\n";
+  ofs << "last_key:\t" << last_key << "\n";
+  auto [min_id, max_id] = get_tranc_id_range();
+  ofs << "tranc_id_range:\t" << min_id << "-" << max_id << "\n";
+  ofs << "sources:\t";
+  if (sources.empty()) {
+    ofs << "(memtable/flush)"
+        << "\n";
+  } else {
+    for (size_t i = 0; i < sources.size(); ++i) {
+      if (i)
+        ofs << ",";
+      ofs << sources[i];
+    }
+    ofs << "\n";
+  }
+
+  // iterate all entries and write key\tvalue lines
+  size_t count = 0;
+  for (auto it = this->begin(0); it.is_valid() && !it.is_end(); ++it) {
+    try {
+      auto kv = *it;
+      // try to get tranc_id: prefer iterator's get_tranc_id if available,
+      // otherwise 0
+      uint64_t tr_id = 0;
+      try {
+        tr_id = it.get_tranc_id();
+      } catch (...) {
+        // fallback: try BlockIterator-style (not available on SstIterator
+        // directly)
+        tr_id = 0;
+      }
+      ofs << kv.first << "\t" << tr_id << "\t" << kv.second << "\n";
+      ++count;
+    } catch (...) {
+      // ignore iterator errors
+    }
+  }
+  ofs << "entry_count:\t" << count << "\n";
+
+  ofs.close();
+}
+
 // **************************************************
 // SSTBuilder
 // **************************************************
@@ -259,7 +327,10 @@ void SSTBuilder::add(const std::string &key, const std::string &value,
   }
 }
 
-size_t SSTBuilder::estimated_size() const { return data.size(); }
+size_t SSTBuilder::estimated_size() const { 
+  // 返回已完成的 blocks 的大小 + 当前未完成的 block 的大小
+  return data.size() + block.cur_size(); 
+}
 
 void SSTBuilder::finish_block() {
   // TODO: Lab 3.5 构建块
