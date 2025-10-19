@@ -37,6 +37,9 @@ public:
   value_type operator*() const;
   bool is_end() const;
 
+  // Return tranc_id of the current entry (or 0 if invalid/end)
+  uint64_t current_tranc_id() const;
+
 private:
   void update_current() const;
   // 跳过当前不可见事务的id (如果开启了事务功能)
