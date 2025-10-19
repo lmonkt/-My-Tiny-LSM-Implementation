@@ -1,4 +1,5 @@
 #include "../../include/iterator/iterator.h"
+#include <iostream>
 #include <memory>
 #include <tuple>
 #include <vector>
@@ -32,8 +33,8 @@ bool operator==(const SearchItem &a, const SearchItem &b) {
 
 // *************************** HeapIterator ***************************
 HeapIterator::HeapIterator(std::vector<SearchItem> item_vec,
-                           uint64_t max_tranc_id)
-    : max_tranc_id_(max_tranc_id) {
+                           uint64_t max_tranc_id, bool filter_empty)
+    : max_tranc_id_(max_tranc_id), filter_empty_(filter_empty) {
   // TODO: Lab2.2 实现 HeapIterator 构造函数
   for (auto &item : item_vec) {
     items.push(std::move(item));
@@ -45,7 +46,7 @@ HeapIterator::HeapIterator(std::vector<SearchItem> item_vec,
     while (!items.empty() && top.key_ == items.top().key_) {
       items.pop();
     }
-    if (!top.value_.empty()) {
+    if (!filter_empty_ || !top.value_.empty()) {
       current = std::make_shared<value_type>(std::move(top.key_),
                                              std::move(top.value_));
       break;
@@ -72,7 +73,7 @@ BaseIterator &HeapIterator::operator++() {
     while (!items.empty() && top.key_ == items.top().key_) {
       items.pop();
     }
-    if (top.value_.empty()) {
+    if (filter_empty_ && top.value_.empty()) {
       continue;
     }
     current = std::make_shared<value_type>(std::move(top.key_),
@@ -120,8 +121,8 @@ void HeapIterator::skip_by_tranc_id() {
   // TODO: Lab2.2 后续的Lab实现, 只是作为标记提醒
 }
 
-bool HeapIterator::is_end() const { return items.empty(); }
-bool HeapIterator::is_valid() const { return !items.empty(); }
+bool HeapIterator::is_end() const { return !current; }
+bool HeapIterator::is_valid() const { return current != nullptr; }
 
 void HeapIterator::update_current() const {
   // current 缓存了当前键值对的值, 你实现 -> 重载时可能需要

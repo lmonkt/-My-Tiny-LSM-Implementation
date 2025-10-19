@@ -1,5 +1,6 @@
 #include "../../include/sst/sst_iterator.h"
 #include "../../include/sst/sst.h"
+#include "spdlog/spdlog.h"
 #include <cstddef>
 #include <iostream>
 #include <memory>
@@ -7,7 +8,6 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
-
 namespace tiny_lsm {
 
 // predicate返回值:
@@ -260,7 +260,8 @@ SstIterator::merge_sst_iterator(std::vector<SstIterator> iter_vec,
       ++iter;
     }
   }
-  HeapIterator it_begin(std::move(items), tranc_id);
+  HeapIterator it_begin(std::move(items), tranc_id,
+                        false); // filter_empty=false for compaction
   return std::make_pair(it_begin, HeapIterator());
 }
 } // namespace tiny_lsm
