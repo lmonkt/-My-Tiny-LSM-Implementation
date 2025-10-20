@@ -350,42 +350,56 @@ HeapIterator MemTable::iters_preffix(const std::string &preffix,
 std::optional<std::pair<HeapIterator, HeapIterator>>
 MemTable::iters_monotony_predicate(
     uint64_t tranc_id, std::function<int(const std::string &)> predicate) {
-  // TODO Lab 2.3 MemTable 的谓词查询迭代器起始范围
-  //这里返回两个HeapIterator，第一个应该是全推进去，第二个就是只有最后一个的
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wambiguous-reversed-operator"
 
-  // TODO Lab 2.3 MemTable 的前缀迭代器
   std::shared_lock<std::shared_mutex> slock1(cur_mtx);
   std::shared_lock<std::shared_mutex> slock2(frozen_mtx);
-  std::vector<SearchItem> sea;
-  auto opt_range = current_table->iters_monotony_predicate(predicate);
-  if (opt_range.has_value()) {
-    auto &[start, end] = opt_range.value();
-    for (auto tmp = start; tmp != end; ++tmp) {
-      sea.emplace_back(
-          SearchItem(tmp.get_key(), tmp.get_value(), 0, 0, tmp.get_tranc_id()));
-    }
-  }
+  std::vector<SearchItem> item_vec;
 
-  int table_id = 1;
-
-  for (auto tmp : frozen_tables) {
-    auto opt_range = tmp->iters_monotony_predicate(predicate);
-    if (opt_range.has_value()) {
-      auto &[start, end] = opt_range.value();
-      for (auto tmp = start; tmp != end; ++tmp) {
-        sea.emplace_back(SearchItem(tmp.get_key(), tmp.get_value(), table_id, 0,
-                                    tmp.get_tranc_id()));
+  // 从当前表查询
+  auto cur_result = current_table->iters_monotony_predicate(predicate);
+  if (cur_result.has_value()) {
+    auto [begin, end] = cur_result.value();
+    for (auto iter = begin; iter != end; ++iter) {
+      if (tranc_id != 0 && iter.get_tranc_id() > tranc_id) {
+        continue; // 跳过不可见的事务
       }
-      ++table_id;
+      if (!item_vec.empty() && item_vec.back().key_ == iter.get_key()) {
+        continue; // 跳过重复的key
+      }
+      item_vec.emplace_back(iter.get_key(), iter.get_value(), 0, 0,
+                            iter.get_tranc_id());
     }
   }
-  if (!sea.empty()) {
-    return std::make_optional(std::make_pair(
-        HeapIterator(sea, table_id), HeapIterator({sea.back()}, table_id)));
+
+  int table_idx = 1;
+  // 从冻结表查询
+  for (auto ft = frozen_tables.begin(); ft != frozen_tables.end(); ft++) {
+    auto table = *ft;
+    auto result = table->iters_monotony_predicate(predicate);
+    if (result.has_value()) {
+      auto [begin, end] = result.value();
+      for (auto iter = begin; iter != end; ++iter) {
+        if (tranc_id != 0 && iter.get_tranc_id() > tranc_id) {
+          continue; // 跳过不可见的事务
+        }
+        if (!item_vec.empty() && item_vec.back().key_ == iter.get_key()) {
+          continue; // 跳过重复的key
+        }
+        item_vec.emplace_back(iter.get_key(), iter.get_value(), table_idx, 0,
+                              iter.get_tranc_id());
+      }
+    }
+    table_idx++;
   }
+
 #pragma clang diagnostic pop
-  return std::nullopt;
+
+  if (item_vec.empty()) {
+    return std::nullopt;
+  }
+
+  return std::make_pair(HeapIterator(item_vec, tranc_id), HeapIterator{});
 }
 } // namespace tiny_lsm

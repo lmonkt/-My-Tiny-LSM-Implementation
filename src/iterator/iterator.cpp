@@ -46,11 +46,12 @@ HeapIterator::HeapIterator(std::vector<SearchItem> item_vec,
     while (!items.empty() && top.key_ == items.top().key_) {
       items.pop();
     }
-    if (!filter_empty_ || !top.value_.empty()) {
-      current = std::make_shared<value_type>(std::move(top.key_),
-                                             std::move(top.value_));
-      break;
+    if (filter_empty_ && top.value_.empty()) {
+      continue;
     }
+    current = std::make_shared<value_type>(std::move(top.key_),
+                                           std::move(top.value_));
+    break;
   }
 }
 
@@ -121,8 +122,10 @@ void HeapIterator::skip_by_tranc_id() {
   // TODO: Lab2.2 后续的Lab实现, 只是作为标记提醒
 }
 
-bool HeapIterator::is_end() const { return !current; }
-bool HeapIterator::is_valid() const { return current != nullptr; }
+bool HeapIterator::is_end() const { return items.empty() && !current; }
+bool HeapIterator::is_valid() const {
+  return current != nullptr || !items.empty();
+}
 
 void HeapIterator::update_current() const {
   // current 缓存了当前键值对的值, 你实现 -> 重载时可能需要

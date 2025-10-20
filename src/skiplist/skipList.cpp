@@ -348,25 +348,101 @@ SkipList::iters_monotony_predicate(
     std::function<int(const std::string &)> predicate) {
   // TODO: Lab1.3 任务：实现谓词查询的起始位置
   auto current = head;
+  bool find1 = false;
+
+  // 从最高层开始查找第一个满足谓词的位置
   for (int i = current_level - 1; i >= 0; --i) {
-    while (current->forward_[i] &&
-           (predicate(current->forward_[i]->key_) > 0)) {
-      current = current->forward_[i];
+    while (!find1) {
+      auto forward_i = current->forward_[i];
+      if (forward_i == nullptr) {
+        break;
+      }
+      auto direction = predicate(forward_i->key_);
+      if (direction == 0) {
+        // 找到满足谓词的位置
+        find1 = true;
+        current = forward_i;
+        break;
+      } else if (direction < 0) {
+        // 不满足谓词，且方向错误（位于目标区间右侧）
+        // 需要尝试更小的步长(层级)
+        break;
+      } else {
+        // 不满足谓词，但方向正确（位于目标区间左侧）
+        current = forward_i;
+      }
     }
   }
-  current = current->forward_[0];
-  SkipListIterator start(current);
-  if (!start.is_end() && start.is_valid()) {
-    while (current->forward_[0] &&
-           (predicate(current->forward_[0]->key_) >= 0)) {
-      current = current->forward_[0];
-    }
-    SkipListIterator end(current->forward_[0]);
 
-    return std::make_optional(std::make_pair(start, end));
-
-  } else
+  if (!find1) {
+    // 没有找到满足谓词的位置
     return std::nullopt;
+  }
+
+  // 记住当前位置
+  auto current2 = current;
+
+  // current 已经满足谓词，但有可能中途跳过了节点，需要向前检查
+  for (int i = current->backward_.size() - 1; i >= 0; --i) {
+    while (true) {
+      if (current->backward_[i].lock() == nullptr ||
+          current->backward_[i].lock() == head) {
+        // 当前层没有前向节点，或前向节点指向头结点
+        break;
+      }
+      auto direction = predicate(current->backward_[i].lock()->key_);
+      if (direction == 0) {
+        // 前一个位置满足谓词，继续判断
+        current = current->backward_[i].lock();
+        continue;
+      } else if (direction > 0) {
+        // 前一个位置不满足谓词
+        // 需要尝试更小的步长(层级)
+        break;
+      } else {
+        // 因为当前位置满足了谓词，前一个位置不可能返回-1
+        // 这种情况属于跳表实现错误
+        std::cerr << "SkipList::iters_monotony_predicate: invalid direction"
+                  << std::endl;
+        throw std::runtime_error("iters_monotony_predicate: invalid direction");
+      }
+    }
+  }
+
+  // 找到第一个满足谓词的节点
+  SkipListIterator begin_iter(current);
+
+  // 找到最后一个满足谓词的节点
+  for (int i = current2->forward_.size() - 1; i >= 0; --i) {
+    while (true) {
+      if (current2->forward_[i] == nullptr) {
+        // 当前层没有后向节点
+        break;
+      }
+      auto direction = predicate(current2->forward_[i]->key_);
+      if (direction == 0) {
+        // 后一个位置满足谓词，继续判断
+        current2 = current2->forward_[i];
+        continue;
+      } else if (direction < 0) {
+        // 后一个位置不满足谓词
+        // 需要尝试更小的步长(层级)
+        break;
+      } else {
+        // 因为当前位置满足了谓词，后一个位置不可能返回1
+        // 这种情况属于跳表实现错误
+        std::cerr << "SkipList::iters_monotony_predicate: invalid direction"
+                  << std::endl;
+        throw std::runtime_error("iters_monotony_predicate: invalid direction");
+      }
+    }
+  }
+
+  SkipListIterator end_iter(current2);
+  // 转化为开区间 [begin, end)
+  ++end_iter;
+
+  return std::make_optional(std::make_pair(begin_iter, end_iter));
 }
 
 // ? 打印跳表, 你可以在出错时调用此函数进行调试
