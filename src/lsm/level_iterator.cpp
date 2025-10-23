@@ -15,9 +15,11 @@ Level_Iterator::Level_Iterator(std::shared_ptr<LSMEngine> engine,
 
   // 1. 获取内存部分迭代器
   // TODO: 这里最好修改 memtable.begin 使其返回一个指针, 避免多余的内存拷贝
+  // auto mem_iter = engine_->memtable.begin(max_tranc_id_);
+  // std::shared_ptr<HeapIterator> mem_iter_ptr =
+  // std::make_shared<HeapIterator>(); *mem_iter_ptr = mem_iter;
   auto mem_iter = engine_->memtable.begin(max_tranc_id_);
-  std::shared_ptr<HeapIterator> mem_iter_ptr = std::make_shared<HeapIterator>();
-  *mem_iter_ptr = mem_iter;
+  auto mem_iter_ptr = std::make_shared<HeapIterator>(std::move(mem_iter));
   iter_vec.push_back(mem_iter_ptr);
 
   // 2. 获取 L0 层的迭代器
@@ -25,9 +27,12 @@ Level_Iterator::Level_Iterator(std::shared_ptr<LSMEngine> engine,
   for (auto &sst_id : engine_->level_sst_ids[0]) {
     auto sst = engine_->ssts[sst_id];
     for (auto iter = sst->begin(max_tranc_id_);
-         iter.is_valid() && iter != sst->end(); ++iter) {
-      // 这里越新的sst的idx越大, 我们需要让新的sst优先在堆顶
-      // 让新的sst(拥有更大的idx)排序在前面, 反转符号就行了
+      iter.is_valid(); ++iter) {
+      // 对同一 key 且同一事务 id 的项，SearchItem 按 level 升序、再按 idx
+      // 升序比较。 在 L0 中，较新的 SST 对应的 sst_id 更大。为了让较新的 SST
+      // 的记录优先出现， 我们把 SearchItem::idx_ 设为 -sst_id（即将 sst_id
+      // 取反），使得原本更大的 sst_id 在 idx 比较中变成更小的值，从而在 heap
+      // 中被优先弹出。
       if (max_tranc_id_ != 0 && iter.get_tranc_id() > max_tranc_id_) {
         // 如果开启了事务, 比当前事务 id 更大的记录是不可见的
         continue;
@@ -45,12 +50,18 @@ Level_Iterator::Level_Iterator(std::shared_ptr<LSMEngine> engine,
     if (level == 0) {
       continue;
     }
+    // 为该层一次性创建一个 ConcactIterator（串联本层所有 SST），
+    // 而不是在逐步增长的 ssts 前缀上重复创建多个迭代器。
+    // 之前的写法会导致 [sst0], [sst0,sst1], [sst0,sst1,sst2] ... 多个前缀迭代器被加入，
+    // 既效率低也会引入重复遍历。
     std::vector<std::shared_ptr<SST>> ssts;
+    ssts.reserve(sst_id_list.size());
     for (auto sst_id : sst_id_list) {
-      auto sst = engine_->ssts[sst_id];
-      ssts.push_back(sst);
+      ssts.push_back(engine_->ssts[sst_id]);
+    }
+    if (!ssts.empty()) {
       std::shared_ptr<ConcactIterator> level_i_iter =
-          std::make_shared<ConcactIterator>(ssts, max_tranc_id);
+          std::make_shared<ConcactIterator>(std::move(ssts), max_tranc_id);
       iter_vec.push_back(level_i_iter);
     }
   }
