@@ -86,7 +86,7 @@ LSMEngine::LSMEngine(std::string path) : data_dir(path) {
       spdlog::info("LSMEngine--"
                    "Loaded SST: {} successfully!",
                    sst_path);
-      
+
       // Export loaded SST for debugging (only if LSM_EXPORT_SST env var is set)
       if (std::getenv("LSM_EXPORT_SST")) {
         try {
@@ -103,7 +103,7 @@ LSMEngine::LSMEngine(std::string path) : data_dir(path) {
           spdlog::warn("LSMEngine--Failed to export loaded SST: unknown error");
         }
       }
-      
+
       ssts[sst_id] = sst;
 
       level_sst_ids[level].push_back(sst_id);
@@ -517,14 +517,15 @@ uint64_t LSMEngine::flush() {
   // 5. 更新内存索引
   ssts[new_sst_id] = new_sst;
 
-  // Export the newly created SST for debugging (only if LSM_EXPORT_SST env var is set)
+  // Export the newly created SST for debugging (only if LSM_EXPORT_SST env var
+  // is set)
   if (std::getenv("LSM_EXPORT_SST")) {
     try {
       std::filesystem::path exports_dir =
           std::filesystem::path(data_dir).parent_path() / "exports";
       std::stringstream ss;
-      ss << exports_dir.string() << "/sst_" << std::setfill('0') << std::setw(32)
-         << new_sst_id << "." << 0 << ".txt";
+      ss << exports_dir.string() << "/sst_" << std::setfill('0')
+         << std::setw(32) << new_sst_id << "." << 0 << ".txt";
       spdlog::debug("LSMEngine--Exporting flushed SST to {}", ss.str());
       new_sst->export_to_txt(ss.str(), 0, {});
     } catch (...) {
@@ -555,17 +556,82 @@ std::optional<std::pair<TwoMergeIterator, TwoMergeIterator>>
 LSMEngine::lsm_iters_monotony_predicate(
     uint64_t tranc_id, std::function<int(const std::string &)> predicate) {
   // TODO: Lab 4.7 谓词查询
-  return std::nullopt;
+  // 1) 先从 MemTable 中取出满足谓词的区间
+  auto mem_result = memtable.iters_monotony_predicate(tranc_id, predicate);
+
+  // 2) 再从各层 SST 中提取满足谓词范围内的键值，汇总到一个 HeapIterator
+  // 的底料上
+  std::vector<SearchItem> item_vec;
+  for (auto &[sst_level, sst_ids] : level_sst_ids) {
+    for (auto &sst_id : sst_ids) {
+      auto sst = ssts[sst_id];
+      auto result = sst_iters_monotony_predicate(sst, tranc_id, predicate);
+      if (!result.has_value()) {
+        continue;
+      }
+
+      spdlog::trace(
+          "LSMEngine--lsm_iters_monotony_predicate(tranc_id={}): find a range "
+          "from l{} sst{}",
+          tranc_id, sst_level, sst_id);
+
+      auto [it_begin, it_end] = result.value();
+      // 为避免编译器对自定义迭代器 operator!= 的歧义告警，
+      // 这里用谓词再次裁剪来限定区间，而不直接比较 it_end。
+      for (auto it = it_begin; it.is_valid() && !it.is_end(); ++it) {
+        // 注意：L0层SST文件键范围重叠，返回的迭代器范围可能比实际谓词匹配范围更宽
+        // 因此需要在此进行精确过滤
+        if (predicate(it.key()) != 0) {
+          break;
+        }
+        if (tranc_id != 0 && it_begin.get_tranc_id() > tranc_id) {
+          // 开启事务时，跳过不可见版本
+          continue;
+        }
+        if (!item_vec.empty() && item_vec.back().key_ == it.key()) {
+          // 对于同一 key，只保留更“新”的一个（结合比较器的 level/idx 优先级）
+          continue;
+        }
+        // idx 用 -sst_id 让 L0 中更新的 SST（更大的 id）在堆中优先
+        item_vec.emplace_back(it.key(), it.value(), -static_cast<int>(sst_id),
+                              sst_level, it.get_tranc_id());
+      }
+    }
+  }
+
+  auto l_sst_heap = std::make_shared<HeapIterator>(item_vec, tranc_id);
+
+  // 3) 归并 MemTable 的范围结果与磁盘侧的汇总结果
+  if (!mem_result.has_value() && item_vec.empty()) {
+    return std::nullopt;
+  }
+
+  if (mem_result.has_value()) {
+    auto [mem_start, mem_end] = mem_result.value();
+    auto mem_start_ptr = std::make_shared<HeapIterator>();
+    *mem_start_ptr = mem_start; // 拷贝 begin 迭代器（范围已被下层裁剪）
+    auto start = TwoMergeIterator(mem_start_ptr, l_sst_heap, tranc_id);
+    auto end = TwoMergeIterator{}; // 默认 end 哨兵
+    return std::make_optional<std::pair<TwoMergeIterator, TwoMergeIterator>>(
+        start, end);
+  } else {
+    auto start = TwoMergeIterator(std::make_shared<HeapIterator>(), l_sst_heap,
+                                  tranc_id);
+    auto end = TwoMergeIterator{};
+    return std::make_optional<std::pair<TwoMergeIterator, TwoMergeIterator>>(
+        start, end);
+  }
 }
 
 Level_Iterator LSMEngine::begin(uint64_t tranc_id) {
   // TODO: Lab 4.7
-  throw std::runtime_error("Not implemented");
+  return Level_Iterator(shared_from_this(), tranc_id);
 }
 
 Level_Iterator LSMEngine::end() {
   // TODO: Lab 4.7
-  throw std::runtime_error("Not implemented");
+  // 返回默认构造的 end 哨兵，避免在构造函数中访问空 engine 导致崩溃
+  return Level_Iterator();
 }
 
 void LSMEngine::full_compact(size_t src_level) {
@@ -595,8 +661,9 @@ void LSMEngine::full_compact(size_t src_level) {
   } else {
     new_ssts = full_common_compact(lx_ids, ly_ids, src_level + 1);
   }
-  
-  // Export newly generated SSTs for debugging (only if LSM_EXPORT_SST env var is set)
+
+  // Export newly generated SSTs for debugging (only if LSM_EXPORT_SST env var
+  // is set)
   if (std::getenv("LSM_EXPORT_SST")) {
     try {
       std::filesystem::path exports_dir =
@@ -617,7 +684,7 @@ void LSMEngine::full_compact(size_t src_level) {
       spdlog::warn("LSMEngine--Failed to export compacted SSTs");
     }
   }
-  
+
   // 完成 compact 后移除旧的sst记录
   for (auto &old_sst_id : old_level_id_x) {
     ssts[old_sst_id]->del_sst();
@@ -663,7 +730,8 @@ LSMEngine::full_l0_l1_compact(std::vector<size_t> &l0_ids,
   // l0 的sst之间的key有重叠, 需要合并
   auto [l0_begin, l0_end] = SstIterator::merge_sst_iterator(l0_iters, 0);
 
-  std::shared_ptr<HeapIterator> l0_begin_ptr = std::make_shared<HeapIterator>(std::move(l0_begin));
+  std::shared_ptr<HeapIterator> l0_begin_ptr =
+      std::make_shared<HeapIterator>(std::move(l0_begin));
 
   std::shared_ptr<ConcactIterator> old_l1_begin_ptr =
       std::make_shared<ConcactIterator>(l1_ssts, 0);
@@ -712,7 +780,7 @@ LSMEngine::gen_sst_from_iter(BaseIterator &iter, size_t target_sst_size,
   std::vector<std::shared_ptr<SST>> new_ssts;
   auto new_sst_builder =
       SSTBuilder(TomlConfig::getInstance().getLsmBlockSize(), true);
-  
+
   while (iter.is_valid() && !iter.is_end()) {
     auto kv = *iter;
     new_sst_builder.add(kv.first, kv.second, 0);
@@ -733,7 +801,7 @@ LSMEngine::gen_sst_from_iter(BaseIterator &iter, size_t target_sst_size,
                                    true); // 重置builder
     }
   }
-  
+
   // 构建剩余的 entries
   if (new_sst_builder.estimated_size() > 0) {
     size_t sst_id = next_sst_id++; // TODO: 后续优化并发性

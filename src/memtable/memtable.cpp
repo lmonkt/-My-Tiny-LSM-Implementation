@@ -287,7 +287,7 @@ HeapIterator MemTable::begin(uint64_t tranc_id) {
   std::vector<SearchItem> sea;
   for (auto tmp : current_table->flush()) {
     auto [key, value, id] = tmp;
-    if (id != 0 && id > tranc_id) {
+    if (tranc_id != 0 && id > tranc_id) {
       continue;
     }
     sea.emplace_back(SearchItem(key, value, 0, 0, id));
@@ -297,7 +297,7 @@ HeapIterator MemTable::begin(uint64_t tranc_id) {
   for (auto tmp : frozen_tables) {
     for (auto tab : (*tmp).flush()) {
       auto [key, value, id] = tab;
-      if (id != 0 && id > tranc_id) {
+      if (tranc_id != 0 && id > tranc_id) {
         continue;
       }
       sea.emplace_back(SearchItem(key, value, table_id, 0, id));
