@@ -198,30 +198,19 @@ SkipListIterator SkipList::get(const std::string &key, uint64_t tranc_id) {
   }
   // 移动到最底层
   current = current->forward_[0];
-  if (tranc_id == 0) {
-    // 如果没有开启事务，直接比较key即可
-    // 如果找到匹配的key，返回value
-    if (current && current->key_ == key) {
+
+  // 统一处理事务过滤：
+  // - tranc_id == 0: 返回最新版本（第一个遇到的相同 key）
+  // - tranc_id != 0: 返回第一个满足 current->tranc_id_ <= tranc_id
+  // 的版本（跳过不可见的新版本）
+  while (current && current->key_ == key) {
+    if (tranc_id == 0 || current->tranc_id_ <= tranc_id) {
       return SkipListIterator{current};
     }
-  } else {
-    while (current && current->key_ == key) {
-      // 如果开启了事务，只返回小于等于事务id的值
-      if (tranc_id != 0) {
-        if (current->tranc_id_ <= tranc_id) {
-          // 满足事务可见性
-          return SkipListIterator{current};
-
-        } else {
-          // 否则跳过
-          current = current->forward_[0];
-        }
-      } else {
-        // 没有开启事务
-        return SkipListIterator{current};
-      }
-    }
+    // 否则该版本对当前事务不可见，继续查找更旧的版本
+    current = current->forward_[0];
   }
+
   // 未找到返回空
   spdlog::trace("SkipList--get({}): not found", key);
   return SkipListIterator{};
@@ -230,36 +219,109 @@ SkipListIterator SkipList::get(const std::string &key, uint64_t tranc_id) {
 // 删除键值对
 // ! 这里的 remove 是跳表本身真实的 remove,  lsm 应该使用 put 空值表示删除,
 // ! 这里只是为了实现完整的 SkipList 不会真正被上层调用
-void SkipList::remove(const std::string &key) {
-  // TODO: Lab1.1 任务：实现删除键值对
+// 向后兼容的无事务版本，等价于 remove(key, 0)
+void SkipList::remove(const std::string &key) { remove(key, 0); }
 
+// 事务感知的删除：仅删除与 tranc_id 精确匹配的版本（tranc_id != 0），
+// 或者在 tranc_id == 0 时删除最新版本（与以前行为一致）。
+void SkipList::remove(const std::string &key, uint64_t tranc_id) {
   std::vector<std::shared_ptr<SkipListNode>> update(max_level, nullptr);
   auto current = head;
+
+  // 根据是否提供 tranc_id 选择不同的前驱搜索条件。
+  // 节点排序规则：按 key 升序；当 key 相等时，tranc_id 较大者排在前面。
   for (int i = current_level - 1; i >= 0; --i) {
-    while (current->forward_[i] && current->forward_[i]->key_ < key) {
-      current = current->forward_[i];
+    while (true) {
+      auto f = current->forward_[i];
+      if (!f)
+        break;
+      if (f->key_ < key) {
+        current = f;
+        continue;
+      }
+      if (f->key_ == key) {
+        if (tranc_id == 0) {
+          // 不使用事务 id：我们只需定位到第一个 key（最新版本）之前的位置
+          break;
+        } else {
+          // 使用事务 id：依据跳表的排序规则，向前移动直到遇到第一个不小于目标
+          // (key,tranc_id) 排序中 key 相等时 tranc_id 较大者在前，所以当
+          // f->tranc_id_ > tranc_id 时，f < target
+          if (f->tranc_id_ > tranc_id) {
+            current = f;
+            continue;
+          }
+        }
+      }
+      break;
     }
     update[i] = current;
   }
 
-  current = current->forward_[0];
+  current = update[0]->forward_[0];
 
-  if (current && current->key_ == key) {
-    for (int i = 0; i < current_level; ++i) {
-      if (update[i]->forward_[i] != current) {
+  // 如果没有找到 key，直接返回
+  if (!current || current->key_ != key) {
+    return;
+  }
+
+  // tranc_id == 0 表示删除最新版本（current 即为最新版本）
+  if (tranc_id != 0 && current->tranc_id_ != tranc_id) {
+    // 如果 current 不是目标事务 id，则尝试向后查找同 key 的节点（更旧的版本）
+    auto cursor = current->forward_[0];
+    std::shared_ptr<SkipListNode> target = nullptr;
+    while (cursor && cursor->key_ == key) {
+      if (cursor->tranc_id_ == tranc_id) {
+        target = cursor;
         break;
       }
-      update[i]->forward_[i] = current->forward_[i];
+      cursor = cursor->forward_[0];
     }
-    for (int i = 0; i < current->backward_.size() && i < current_level; ++i) {
-      if (current->forward_[i]) {
-        current->forward_[i]->set_backward(i, update[i]);
+
+    if (!target) {
+      // 没有找到匹配的事务版本，什么也不做
+      return;
+    }
+
+    // 为了删除 target，需要重建 update 链以指向 target 的前驱
+    current = head;
+    for (int i = current_level - 1; i >= 0; --i) {
+      while (true) {
+        auto f = current->forward_[i];
+        if (!f)
+          break;
+        // 向前移动直到 f 指向 target 或在 target 之前
+        if (f.get() != target.get() &&
+            (f->key_ < key || (f->key_ == key && f->tranc_id_ > tranc_id))) {
+          current = f;
+          continue;
+        }
+        break;
       }
+      update[i] = current;
     }
-    size_bytes -= (key.size() + current->value_.size() + sizeof(uint64_t));
-    while (current_level > 1 && head->forward_[current_level - 1] == nullptr) {
-      current_level--;
+
+    current = target; // 将要删除的节点
+  }
+
+  // 执行删除：更新 forward 指针与 backward 链
+  for (int i = 0; i < current_level; ++i) {
+    if (update[i]->forward_[i] != current) {
+      break;
     }
+    update[i]->forward_[i] = current->forward_[i];
+  }
+  for (int i = 0; i < current->backward_.size() && i < current_level; ++i) {
+    if (current->forward_[i]) {
+      current->forward_[i]->set_backward(i, update[i]);
+    }
+  }
+
+  size_bytes -=
+      (current->key_.size() + current->value_.size() + sizeof(uint64_t));
+
+  while (current_level > 1 && head->forward_[current_level - 1] == nullptr) {
+    current_level--;
   }
 }
 

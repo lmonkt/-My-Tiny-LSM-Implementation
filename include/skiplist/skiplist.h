@@ -128,7 +128,10 @@ public:
   SkipListIterator get(const std::string &key, uint64_t tranc_id);
 
   // !!! 这里的 remove 是跳表本身真实的 remove,  lsm 应该使用 put 空值表示删除
-  void remove(const std::string &key); // 删除键值对
+  // 事务感知的移除：重载提供带事务 id 的版本，默认保留无事务(0)的行为
+  void remove(
+      const std::string &key); // 删除键值对 (向后兼容，等价于 remove(key, 0))
+  void remove(const std::string &key, uint64_t tranc_id); // 事务感知的删除
 
   // 将跳表数据刷出，返回有序键值对列表
   // value 为 真实 value 和 tranc_id 的二元组
