@@ -287,9 +287,6 @@ HeapIterator MemTable::begin(uint64_t tranc_id) {
   std::vector<SearchItem> sea;
   for (auto tmp : current_table->flush()) {
     auto [key, value, id] = tmp;
-    if (tranc_id != 0 && id > tranc_id) {
-      continue;
-    }
     sea.emplace_back(SearchItem(key, value, 0, 0, id));
   }
   int table_id = 1;
@@ -297,9 +294,6 @@ HeapIterator MemTable::begin(uint64_t tranc_id) {
   for (auto tmp : frozen_tables) {
     for (auto tab : (*tmp).flush()) {
       auto [key, value, id] = tab;
-      if (tranc_id != 0 && id > tranc_id) {
-        continue;
-      }
       sea.emplace_back(SearchItem(key, value, table_id, 0, id));
     }
     ++table_id;
@@ -362,12 +356,6 @@ MemTable::iters_monotony_predicate(
   if (cur_result.has_value()) {
     auto [begin, end] = cur_result.value();
     for (auto iter = begin; iter != end; ++iter) {
-      if (tranc_id != 0 && iter.get_tranc_id() > tranc_id) {
-        continue; // 跳过不可见的事务
-      }
-      if (!item_vec.empty() && item_vec.back().key_ == iter.get_key()) {
-        continue; // 跳过重复的key
-      }
       item_vec.emplace_back(iter.get_key(), iter.get_value(), 0, 0,
                             iter.get_tranc_id());
     }
@@ -381,12 +369,6 @@ MemTable::iters_monotony_predicate(
     if (result.has_value()) {
       auto [begin, end] = result.value();
       for (auto iter = begin; iter != end; ++iter) {
-        if (tranc_id != 0 && iter.get_tranc_id() > tranc_id) {
-          continue; // 跳过不可见的事务
-        }
-        if (!item_vec.empty() && item_vec.back().key_ == iter.get_key()) {
-          continue; // 跳过重复的key
-        }
         item_vec.emplace_back(iter.get_key(), iter.get_value(), table_idx, 0,
                               iter.get_tranc_id());
       }

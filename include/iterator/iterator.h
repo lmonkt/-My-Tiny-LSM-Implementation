@@ -6,6 +6,7 @@
 #include <queue>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace tiny_lsm {
 
@@ -61,7 +62,8 @@ class HeapIterator : public BaseIterator {
 
 public:
   HeapIterator() = default;
-  HeapIterator(std::vector<SearchItem> item_vec, uint64_t max_tranc_id, bool filter_empty = true);
+  HeapIterator(std::vector<SearchItem> item_vec, uint64_t max_tranc_id,
+               bool filter_empty = true);
   pointer operator->() const;
   virtual value_type operator*() const override;
   BaseIterator &operator++() override;
@@ -76,18 +78,19 @@ public:
 
 private:
   bool top_value_legal() const;
-
-  // 跳过当前不可见事务的id (如果开启了事务功能)
   void skip_by_tranc_id();
-
   void update_current() const;
+  bool advance_to_next();
+  std::optional<SearchItem>
+  select_visible_version(const std::vector<SearchItem> &candidates) const;
 
 private:
   std::priority_queue<SearchItem, std::vector<SearchItem>,
                       std::greater<SearchItem>>
       items;
-  mutable std::shared_ptr<value_type> current; // 用于存储当前元素
+  std::optional<SearchItem> current_item_;
+  mutable std::optional<value_type> cached_value_;
   uint64_t max_tranc_id_ = 0;
-  bool filter_empty_ = true;  // 是否过滤空值（删除标记）
+  bool filter_empty_ = true; // 是否过滤空值（删除标记）
 };
 } // namespace tiny_lsm

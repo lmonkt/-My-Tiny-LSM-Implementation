@@ -35,52 +35,30 @@ bool operator==(const SearchItem &a, const SearchItem &b) {
 HeapIterator::HeapIterator(std::vector<SearchItem> item_vec,
                            uint64_t max_tranc_id, bool filter_empty)
     : max_tranc_id_(max_tranc_id), filter_empty_(filter_empty) {
-  // TODO: Lab2.2 实现 HeapIterator 构造函数
   for (auto &item : item_vec) {
     items.push(std::move(item));
   }
-  current.reset();
-  while (!items.empty()) {
-    auto top = items.top();
-    items.pop();
-    while (!items.empty() && top.key_ == items.top().key_) {
-      items.pop();
-    }
-    if (filter_empty_ && top.value_.empty()) {
-      continue;
-    }
-    current = std::make_shared<value_type>(std::move(top.key_),
-                                           std::move(top.value_));
-    break;
-  }
+  skip_by_tranc_id();
 }
 
 HeapIterator::pointer HeapIterator::operator->() const {
-  // TODO: Lab2.2 实现 -> 重载
-  return current.get(); //用法：iter->first 或 iter->second，等价于(*iter).first
+  if (!current_item_.has_value()) {
+    return nullptr;
+  }
+  update_current();
+  return cached_value_.has_value() ? &cached_value_.value() : nullptr;
 }
 
 HeapIterator::value_type HeapIterator::operator*() const {
-  // TODO: Lab2.2 实现 * 重载
-  return *current; //用法：auto kv = *iter
+  if (!current_item_.has_value()) {
+    return value_type{};
+  }
+  update_current();
+  return cached_value_.value();
 }
 
 BaseIterator &HeapIterator::operator++() {
-  // TODO: Lab2.2 实现 ++ 重载
-  current.reset();
-  while (!items.empty()) {
-    auto top = items.top();
-    items.pop();
-    while (!items.empty() && top.key_ == items.top().key_) {
-      items.pop();
-    }
-    if (filter_empty_ && top.value_.empty()) {
-      continue;
-    }
-    current = std::make_shared<value_type>(std::move(top.key_),
-                                           std::move(top.value_));
-    break;
-  }
+  skip_by_tranc_id();
   return *this;
 }
 
@@ -90,11 +68,13 @@ bool HeapIterator::operator==(const BaseIterator &other) const {
   const HeapIterator *other_heap = dynamic_cast<const HeapIterator *>(&other);
   if (!other_heap)
     return false;
-  if (!current && !other_heap->current)
+  if (!current_item_.has_value() && !other_heap->current_item_.has_value())
     return true;
-  if (!current || !other_heap->current)
+  if (!current_item_.has_value() || !other_heap->current_item_.has_value())
     return false;
-  return *current == *(other_heap->current);
+  return current_item_->key_ == other_heap->current_item_->key_ &&
+         current_item_->value_ == other_heap->current_item_->value_ &&
+         current_item_->tranc_id_ == other_heap->current_item_->tranc_id_;
 }
 
 bool HeapIterator::operator!=(const BaseIterator &other) const {
@@ -102,34 +82,75 @@ bool HeapIterator::operator!=(const BaseIterator &other) const {
   const HeapIterator *other_heap = dynamic_cast<const HeapIterator *>(&other);
   if (!other_heap)
     return true;
-  if (!current && !other_heap->current)
+  if (!current_item_.has_value() && !other_heap->current_item_.has_value())
     return false;
-  if (!current || !other_heap->current)
+  if (!current_item_.has_value() || !other_heap->current_item_.has_value())
     return true;
-  return *current != *(other_heap->current);
+  return current_item_->key_ != other_heap->current_item_->key_ ||
+         current_item_->value_ != other_heap->current_item_->value_ ||
+         current_item_->tranc_id_ != other_heap->current_item_->tranc_id_;
 }
 
-bool HeapIterator::top_value_legal() const {
-  // TODO: Lab2.2 判断顶部元素是否合法
-  // ? 被删除的值是不合法
-  // ? 不允许访问的事务创建或更改的键值对不合法(暂时忽略)
-  if (items.top().value_.empty())
-    return false;
-  return true;
-}
+bool HeapIterator::top_value_legal() const { return current_item_.has_value(); }
 
-void HeapIterator::skip_by_tranc_id() {
-  // TODO: Lab2.2 后续的Lab实现, 只是作为标记提醒
-}
+void HeapIterator::skip_by_tranc_id() { advance_to_next(); }
 
-bool HeapIterator::is_end() const { return items.empty() && !current; }
-bool HeapIterator::is_valid() const {
-  return current != nullptr || !items.empty();
-}
+bool HeapIterator::is_end() const { return !current_item_.has_value(); }
+bool HeapIterator::is_valid() const { return current_item_.has_value(); }
 
 void HeapIterator::update_current() const {
   // current 缓存了当前键值对的值, 你实现 -> 重载时可能需要
   // TODO: Lab2.2 更新当前缓存值
+  if (!current_item_.has_value()) {
+    cached_value_.reset();
+    return;
+  }
+  if (!cached_value_.has_value()) {
+    cached_value_.emplace(current_item_->key_, current_item_->value_);
+  }
+}
+
+bool HeapIterator::advance_to_next() {
+  cached_value_.reset();
+  current_item_.reset();
+
+  while (!items.empty()) {
+    std::vector<SearchItem> group;
+    group.reserve(4);
+
+    SearchItem top = items.top();
+    items.pop();
+    std::string current_key = top.key_;
+    group.emplace_back(std::move(top));
+
+    while (!items.empty() && items.top().key_ == current_key) {
+      group.emplace_back(items.top());
+      items.pop();
+    }
+
+    auto selected = select_visible_version(group);
+    if (!selected.has_value()) {
+      continue;
+    }
+
+    current_item_.emplace(selected.value());
+    return true;
+  }
+  return false;
+}
+
+std::optional<SearchItem> HeapIterator::select_visible_version(
+    const std::vector<SearchItem> &candidates) const {
+  for (const auto &item : candidates) {
+    if (max_tranc_id_ != 0 && item.tranc_id_ > max_tranc_id_) {
+      continue;
+    }
+    if (filter_empty_ && item.value_.empty()) {
+      return std::nullopt; // 可见的删除标记意味着整个 key 被移除
+    }
+    return item;
+  }
+  return std::nullopt;
 }
 
 IteratorType HeapIterator::get_type() const {
