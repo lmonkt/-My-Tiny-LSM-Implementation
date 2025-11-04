@@ -85,6 +85,12 @@ std::optional<std::pair<SstIterator, SstIterator>> sst_iters_monotony_predicate(
   SstIterator it_end(sst, tranc_id);
   it_end.m_block_idx = last;
   it_end.m_block_it = last_block->second;
+
+  // 关键改进：检查起始迭代器是否有效（事务过滤后可能变为空）
+  if (it_begin.is_end() || !it_begin.is_valid()) {
+    return std::nullopt;
+  }
+
   return std::make_pair(it_begin, it_end);
 }
 
@@ -175,13 +181,22 @@ BaseIterator &SstIterator::operator++() {
   ++(*m_block_it);
   if (m_block_it->is_end()) {
     m_block_idx++;
-    if (m_block_idx < m_sst->num_blocks()) {
-      // 读取下一个block
+    // 需要循环查找下一个有可见记录的block
+    while (m_block_idx < m_sst->num_blocks()) {
       auto next_block = m_sst->read_block(m_block_idx);
-      BlockIterator new_blk_it(next_block, 0, max_tranc_id_);
-      (*m_block_it) = new_blk_it;
-    } else {
-      // 没有下一个block
+      m_block_it =
+          std::make_shared<BlockIterator>(next_block, 0, max_tranc_id_);
+
+      // 如果新block有可见记录，停止查找
+      if (!m_block_it->is_end()) {
+        break;
+      }
+      // 否则继续查找下一个block
+      m_block_idx++;
+    }
+
+    // 如果所有block都没有可见记录，设为end状态
+    if (m_block_idx >= m_sst->num_blocks()) {
       m_block_it = nullptr;
     }
   }
