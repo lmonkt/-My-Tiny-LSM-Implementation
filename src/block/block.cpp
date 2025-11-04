@@ -324,16 +324,18 @@ Block::iters_preffix(uint64_t tranc_id, const std::string &preffix) {
                                                  preffix.size()) < 0) {
     ++begin;
   }
+  // 检查是否找到匹配的记录
+  if (begin.is_end() || begin->first.compare(0, preffix.size(), preffix) != 0) {
+    return std::nullopt;
+  }
   auto end = begin;
   while (!end.is_end() && end->first.compare(0, preffix.size(), preffix, 0,
                                              preffix.size()) == 0) {
     ++end;
   }
-  if (begin.is_end())
-    return std::nullopt;
-  else
-    return std::pair{std::make_shared<BlockIterator>(begin),
-                     std::make_shared<BlockIterator>(end)};
+
+  return std::pair{std::make_shared<BlockIterator>(begin),
+                   std::make_shared<BlockIterator>(end)};
 }
 
 // 返回第一个满足谓词的位置和最后一个满足谓词的位置
@@ -388,14 +390,24 @@ Block::get_monotony_predicate_iters(
     }
   }
 
-  // 返回左闭右开：[first, last+1)
-  size_t begin_idx = static_cast<size_t>(first);
-  size_t end_idx_open = static_cast<size_t>(last + 1);
+  // 创建迭代器（BlockIterator会自动处理事务过滤）
+  auto begin_iter = std::make_shared<BlockIterator>(
+      shared_from_this(), static_cast<size_t>(first), tranc_id);
+  auto end_iter = std::make_shared<BlockIterator>(
+      shared_from_this(), static_cast<size_t>(last + 1), tranc_id);
 
-  return std::pair{
-      std::make_shared<BlockIterator>(shared_from_this(), begin_idx, tranc_id),
-      std::make_shared<BlockIterator>(shared_from_this(), end_idx_open,
-                                      tranc_id)};
+  // 关键修改：检查是否所有版本都被过滤掉了
+  if (begin_iter->is_end()) {
+    return std::nullopt;
+  }
+
+  // 可选：验证起始迭代器仍然满足谓词（因为事务过滤可能改变了实际看到的记录）
+  // 如果谓词在过滤后不再满足，返回空
+  if (predicate((*begin_iter)->first) != 0) {
+    return std::nullopt;
+  }
+
+  return std::pair{begin_iter, end_iter};
 }
 
 Block::Entry Block::get_entry_at(size_t offset) const {
