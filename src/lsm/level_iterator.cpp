@@ -26,17 +26,12 @@ Level_Iterator::Level_Iterator(std::shared_ptr<LSMEngine> engine,
   std::vector<SearchItem> item_vec;
   for (auto &sst_id : engine_->level_sst_ids[0]) {
     auto sst = engine_->ssts[sst_id];
-    for (auto iter = sst->begin(max_tranc_id_);
-      iter.is_valid(); ++iter) {
+    for (auto iter = sst->begin(max_tranc_id_); iter.is_valid(); ++iter) {
       // 对同一 key 且同一事务 id 的项，SearchItem 按 level 升序、再按 idx
       // 升序比较。 在 L0 中，较新的 SST 对应的 sst_id 更大。为了让较新的 SST
       // 的记录优先出现， 我们把 SearchItem::idx_ 设为 -sst_id（即将 sst_id
       // 取反），使得原本更大的 sst_id 在 idx 比较中变成更小的值，从而在 heap
       // 中被优先弹出。
-      if (max_tranc_id_ != 0 && iter.get_tranc_id() > max_tranc_id_) {
-        // 如果开启了事务, 比当前事务 id 更大的记录是不可见的
-        continue;
-      }
       item_vec.emplace_back(iter.key(), iter.value(), -sst_id, 0,
                             iter.get_tranc_id());
     }
@@ -52,8 +47,8 @@ Level_Iterator::Level_Iterator(std::shared_ptr<LSMEngine> engine,
     }
     // 为该层一次性创建一个 ConcactIterator（串联本层所有 SST），
     // 而不是在逐步增长的 ssts 前缀上重复创建多个迭代器。
-    // 之前的写法会导致 [sst0], [sst0,sst1], [sst0,sst1,sst2] ... 多个前缀迭代器被加入，
-    // 既效率低也会引入重复遍历。
+    // 之前的写法会导致 [sst0], [sst0,sst1], [sst0,sst1,sst2] ...
+    // 多个前缀迭代器被加入， 既效率低也会引入重复遍历。
     std::vector<std::shared_ptr<SST>> ssts;
     ssts.reserve(sst_id_list.size());
     for (auto sst_id : sst_id_list) {
@@ -88,24 +83,29 @@ std::pair<size_t, std::string> Level_Iterator::get_min_key_idx() const {
   std::string min_key = "";
   for (size_t i = 0; i < iter_vec.size(); ++i) {
     if (!iter_vec[i]->is_valid()) {
-      // 如果当前迭代器无效, 则跳过
       continue;
     } else if (min_key == "") {
-      // 第一次初始化
       min_key = (**iter_vec[i]).first;
       min_idx = i;
-    } else if ((**iter_vec[i]).first < (**iter_vec[min_idx]).first) {
-      // 更新最小key和索引
+    } else if ((**iter_vec[i]).first < min_key) { // 直接比较min_key
       min_key = (**iter_vec[i]).first;
       min_idx = i;
     } else if ((**iter_vec[i]).first == min_key) {
-      // key相同时, 事务id大的排前面
-      if (max_tranc_id_ != 0) {
-        if ((*iter_vec[i]).get_tranc_id() >
-            (*iter_vec[min_idx]).get_tranc_id()) {
+      // key相同时，应该选择事务ID最大的（最新的）记录
+      // 但这里需要确保两个迭代器的事务ID都对当前事务可见
+      uint64_t current_tranc_id = (*iter_vec[i]).get_tranc_id();
+      uint64_t min_tranc_id = (*iter_vec[min_idx]).get_tranc_id();
+
+      // 两个记录都对当前事务可见时，选择事务ID更大的
+      if (current_tranc_id <= max_tranc_id_ && min_tranc_id <= max_tranc_id_) {
+        if (current_tranc_id > min_tranc_id) {
           min_idx = i;
         }
+      } else if (current_tranc_id <= max_tranc_id_) {
+        // 只有当前迭代器可见
+        min_idx = i;
       }
+      // 否则保持原来的min_idx（min_tranc_id可见或两者都不可见时保持原样）
     }
   }
   return std::make_pair(min_idx, min_key);

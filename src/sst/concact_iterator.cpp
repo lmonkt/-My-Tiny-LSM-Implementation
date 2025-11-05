@@ -12,14 +12,19 @@ ConcactIterator::ConcactIterator(std::vector<std::shared_ptr<SST>> ssts,
 }
 
 BaseIterator &ConcactIterator::operator++() {
+  if (is_end()) {
+    return *this; // 如果已经是结束状态，直接返回
+  }
+
   ++cur_iter;
 
-  if (cur_iter.is_end() || !cur_iter.is_valid()) {
+  while ((cur_iter.is_end() || !cur_iter.is_valid()) && cur_idx < ssts.size()) {
     cur_idx++;
     if (cur_idx < ssts.size()) {
       cur_iter = ssts[cur_idx]->begin(max_tranc_id_);
     } else {
       cur_iter = SstIterator(nullptr, max_tranc_id_);
+      break;
     }
   }
   return *this;
