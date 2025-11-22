@@ -833,6 +833,8 @@ LSM::LSM(std::string path)
     : engine(std::make_shared<LSMEngine>(path)),
       tran_manager_(std::make_shared<TranManager>(path)) {
   // TODO: Lab 5.5 控制WAL重放与组件的初始化
+  // 设置 TranManager 的 engine 引用
+  tran_manager_->set_engine(engine);
 }
 
 LSM::~LSM() {
@@ -919,8 +921,7 @@ LSM::lsm_iters_monotony_predicate(
 std::shared_ptr<TranContext>
 LSM::begin_tran(const IsolationLevel &isolation_level) {
   // TODO: xx
-
-  return {};
+  return tran_manager_->new_tranc(isolation_level);
 }
 
 void LSM::set_log_level(const std::string &level) { reset_log_level(level); }
