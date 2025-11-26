@@ -44,5 +44,6 @@ protected:
   std::thread cleaner_thread_;
   uint64_t max_finished_tranc_id_;
   uint64_t clean_interval_;
+  std::atomic<bool> stop_cleaner_;
 };
 } // namespace tiny_lsm

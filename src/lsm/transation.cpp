@@ -4,6 +4,7 @@
 #include "spdlog/spdlog.h"
 #include <algorithm>
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -191,7 +192,7 @@ bool TranContext::commit(bool test_fail) {
   isCommited = true;
   operations.emplace_back(Record::commitRecord(tranc_id_));
   // NOTE: 这里应当在将 commitRecord push 到 operations 后调用
-  // tranManager_->write_to_wal(operations)
+  bool flag = tranManager_->write_to_wal(operations);
   // 并根据返回值决定接下来的行为（参考实现会在 写入 WAL 成功后把数据 apply 到
   // memtable 或在 test_fail 模式下不 apply 以模拟崩溃）。
   return true;
@@ -235,10 +236,13 @@ TranManager::TranManager(std::string data_dir) : data_dir_(data_dir) {
     tranc_id_file_ = FileObj::open(file_path, false);
     read_tranc_id_file();
   }
+  init_new_wal();
 }
 
 void TranManager::init_new_wal() {
   // TODO: Lab 5.x 初始化 wal
+  wal = std::make_shared<WAL>(data_dir_, 1024, max_finished_tranc_id_, 1,
+                              1024 * 1024);
 }
 
 void TranManager::set_engine(std::shared_ptr<LSMEngine> engine) {
@@ -364,7 +368,10 @@ std::map<uint64_t, std::vector<Record>> TranManager::check_recover() {
 
 bool TranManager::write_to_wal(const std::vector<Record> &records) {
   // TODO: Lab 5.4
-
+  if (wal == nullptr) {
+    return false;
+  }
+  wal->log(records, true);
   return true;
 }
 
