@@ -835,6 +835,26 @@ LSM::LSM(std::string path)
   // TODO: Lab 5.5 控制WAL重放与组件的初始化
   // 设置 TranManager 的 engine 引用
   tran_manager_->set_engine(engine);
+  auto recover_map = tran_manager_->check_recover();
+  for (auto &[tran_id, records] : recover_map) {
+    bool has_commit = false;
+    for (auto &record : records) {
+      if (record.getOperationType() == OperationType::COMMIT) {
+        has_commit = true;
+        break;
+      }
+    }
+    if (has_commit) {
+      for (auto &record : records) {
+        if (record.getOperationType() == OperationType::PUT) {
+          engine->memtable.put(record.getKey(), record.getValue(),
+                               record.getTrancId());
+        } else if (record.getOperationType() == OperationType::DELETE) {
+          engine->memtable.remove(record.getKey(), record.getTrancId());
+        }
+      }
+    }
+  }
 }
 
 LSM::~LSM() {

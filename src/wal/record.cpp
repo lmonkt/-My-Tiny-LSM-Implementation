@@ -81,16 +81,14 @@ std::vector<uint8_t> Record::encode() const {
     uint16_t str_len = key_.size();
     memcpy(pos, &str_len, sizeof(uint16_t));
     pos += sizeof(uint16_t);
-
-    memcpy(pos, &key_, str_len);
+    memcpy(pos, key_.data(), str_len);
     pos += str_len;
   }
   if (operation_type_ == OperationType::PUT) {
     uint16_t str_len = value_.size();
     memcpy(pos, &str_len, sizeof(uint16_t));
     pos += sizeof(uint16_t);
-
-    memcpy(pos, &value_, str_len);
+    memcpy(pos, value_.data(), str_len);
     pos += str_len;
   }
   return data;
@@ -120,16 +118,14 @@ std::vector<Record> Record::decode(const std::vector<uint8_t> &data) {
       uint16_t str_len;
       memcpy(&str_len, pos, sizeof(uint16_t));
       pos += sizeof(uint16_t);
-
-      memcpy(&record.key_, pos, str_len);
+      record.key_.assign(reinterpret_cast<const char *>(pos), str_len);
       pos += str_len;
     }
     if (record.operation_type_ == OperationType::PUT) {
       uint16_t str_len;
       memcpy(&str_len, pos, sizeof(uint16_t));
       pos += sizeof(uint16_t);
-
-      memcpy(&record.value_, pos, str_len);
+      record.value_.assign(reinterpret_cast<const char *>(pos), str_len);
       pos += str_len;
     }
     res.emplace_back(record);

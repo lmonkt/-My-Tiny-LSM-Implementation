@@ -363,7 +363,7 @@ std::string TranManager::get_tranc_id_file_path() {
 
 std::map<uint64_t, std::vector<Record>> TranManager::check_recover() {
   // TODO: Lab 5.5
-  return {};
+  return WAL::recover(data_dir_, max_flushed_tranc_id_);
 }
 
 bool TranManager::write_to_wal(const std::vector<Record> &records) {

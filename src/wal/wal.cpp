@@ -22,7 +22,9 @@ WAL::WAL(const std::string &log_dir, size_t buffer_size,
     std::filesystem::create_directories(log_dir);
   }
   active_log_path_ = (std::filesystem::path(log_dir) / "wal.log").string();
-  log_file_ = FileObj::open(active_log_path_, true);
+  // If wal.log already exists, open without truncation; otherwise create it
+  bool create = !std::filesystem::exists(active_log_path_);
+  log_file_ = FileObj::open(active_log_path_, create);
   cleaner_thread_ = std::thread(&WAL::cleaner, this);
 }
 
@@ -56,7 +58,30 @@ WAL::~WAL() {
 std::map<uint64_t, std::vector<Record>>
 WAL::recover(const std::string &log_dir, uint64_t max_flushed_tranc_id) {
   // TODO: Lab 5.5 检查需要重放的WAL日志
-  return {};
+  auto file_path = (std::filesystem::path(log_dir) / "wal.log").string();
+
+  // 如果文件不存在，返回空 map
+  if (!std::filesystem::exists(file_path)) {
+    return {};
+  }
+
+  auto wal_file_ = FileObj::open(file_path, false);
+
+  // 如果文件为空，返回空 map
+  if (wal_file_.size() == 0) {
+    return {};
+  }
+
+  auto data = Record::decode(wal_file_.read_to_slice(0, wal_file_.size()));
+
+  std::map<uint64_t, std::vector<Record>> res;
+  for (auto &record : data) {
+    auto trac_id = record.getTrancId();
+    if (trac_id > max_flushed_tranc_id) {
+      res[trac_id].emplace_back(record);
+    }
+  }
+  return res;
 }
 
 void WAL::log(const std::vector<Record> &records, bool force_flush) {
