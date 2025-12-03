@@ -2,6 +2,7 @@
 #include "../../include/config/config.h"
 #include "../../include/consts.h"
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -162,19 +163,112 @@ void RedisWrapper::flushall() { this->lsm->flush(); }
 std::string RedisWrapper::redis_incr(const std::string &key) {
   // TODO: Lab 6.1 自增一个值类型的key
   // ? 不存在则新建一个值为1的key
-  return "1";
+  std::string mutable_key = key;
+  auto res = redis_get(mutable_key);
+  // If key not found (null bulk string) or TTL returned an error on get
+  if (res == "$-1\r\n" || res == "-ERR invalid expire time format\r\n") {
+    std::string mutable_value = "1";
+    redis_set(mutable_key, mutable_value);
+    return mutable_value;
+  }
+
+  // Parse RESP bulk string "$<len>\r\n<value>\r\n"
+  auto pos = res.find("\r\n");
+  if (pos == std::string::npos || res.size() < 3 || res[0] != '$') {
+    return "-ERR syntax error\r\n";
+  }
+  std::string len_tmp = res.substr(1, pos - 1);
+  int length = 0;
+  try {
+    length = std::stoi(len_tmp);
+  } catch (...) {
+    return "-ERR syntax error\r\n";
+  }
+  size_t start = pos + 2; // after \r\n
+  if (res.size() < start + (size_t)length) {
+    return "-ERR syntax error\r\n";
+  }
+  auto value = res.substr(start, length);
+
+  // Validate numeric string (allow leading negative sign)
+  try {
+    long long num_value = std::stoll(value);
+    num_value += 1;
+    auto v = std::to_string(num_value);
+    redis_set(mutable_key, v);
+    return v;
+  } catch (...) {
+    return "-ERR syntax error\r\n";
+  }
 }
 
 std::string RedisWrapper::redis_decr(const std::string &key) {
-  // TODO: Lab 6.1 自增一个值类型的key
-  // ? 不存在则新建一个值为-1的key
-  return "-1";
+  // Lab 6.1: decrement a numeric value stored at key
+  std::string mutable_key = key;
+  auto res = redis_get(mutable_key);
+  // If key not found (null bulk string) or TTL returned an error on get
+  if (res == "$-1\r\n" || res == "-ERR invalid expire time format\r\n") {
+    std::string mutable_value = "-1";
+    redis_set(mutable_key, mutable_value);
+    return mutable_value;
+  }
+
+  // Parse RESP bulk string "$<len>\r\n<value>\r\n"
+  auto pos = res.find("\r\n");
+  if (pos == std::string::npos || res.size() < 3 || res[0] != '$') {
+    return "-ERR syntax error\r\n";
+  }
+  std::string len_tmp = res.substr(1, pos - 1);
+  int length = 0;
+  try {
+    length = std::stoi(len_tmp);
+  } catch (...) {
+    return "-ERR syntax error\r\n";
+  }
+  size_t start = pos + 2; // after \r\n
+  if (res.size() < start + (size_t)length) {
+    return "-ERR syntax error\r\n";
+  }
+  auto value = res.substr(start, length);
+
+  // Validate and parse numeric string (allow leading negative sign)
+  try {
+    long long num_value = std::stoll(value);
+    num_value -= 1;
+    auto v = std::to_string(num_value);
+    redis_set(mutable_key, v);
+    return v;
+  } catch (...) {
+    return "-ERR syntax error\r\n";
+  }
 }
 
 std::string RedisWrapper::redis_del(std::vector<std::string> &args) {
-  // TODO: Lab 6.1 删除一个key
+  // Lab 6.1 删除一个或多个 key（遵循 Redis DEL 支持多个 key 的语义）
+  // Redis DEL 返回被删除 key 的数量 (整型)，格式为 ":<count>\r\n"。
   int del_count = 0;
-  // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
+
+  // 收集要删除的真正 key（包括可能的 expire_ 前缀项），然后批量删除以提高性能
+  std::vector<std::string> to_remove;
+  for (size_t i = 1; i < args.size(); ++i) {
+    const std::string &k = args[i];
+    // 如果 key 存在，则把它计数并标记删除（同时删除它对应的过期键）
+    if (lsm->get(k)) {
+      ++del_count;
+      to_remove.push_back(k);
+      to_remove.push_back(std::string("expire_") + k);
+    } else {
+      // 如果基本键不存在但存在 expier_* 记录，可以一并删除，但不计入 del_count
+      if (lsm->get(std::string("expire_") + k)) {
+        to_remove.push_back(std::string("expire_") + k);
+      }
+    }
+  }
+
+  if (!to_remove.empty()) {
+    lsm->remove_batch(to_remove);
+  }
+
   return ":" + std::to_string(del_count) + "\r\n";
 }
 
@@ -182,25 +276,78 @@ std::string RedisWrapper::redis_expire(const std::string &key,
                                        std::string seconds_count) {
   // TODO: Lab 6.1 设置一个`key`的过期时间
   // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
-  return ":1\r\n";
+  auto value = lsm->get(key);
+  if (!value) {
+    return ":0\r\n"; // 键不存在
+  }
+
+  try {
+    // 转换为整数并计算绝对过期时间戳
+    long seconds = std::stol(seconds_count);
+    time_t expire_time = std::time(nullptr) + seconds;
+
+    // 存储绝对时间戳
+    lsm->put("expire_" + key, std::to_string(expire_time));
+    return ":1\r\n";
+  } catch (...) {
+    return "-ERR invalid expire time\r\n";
+  }
 }
 
 std::string RedisWrapper::redis_set(std::string &key, std::string &value) {
   // TODO: Lab 6.1 新建(或更改)一个`key`的值
   // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
+  lsm->put(key, value);
   return "+OK\r\n";
 }
 
 std::string RedisWrapper::redis_get(std::string &key) {
   // TODO: Lab 6.1 获取一个`key`的值
   // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
-  return "$-1\r\n"; // 表示键不存在
+  auto expire_value = lsm->get("expire_" + key);
+  if (expire_value) {
+    try {
+      time_t current_time = std::time(nullptr);       // 获取当前时间
+      time_t expire_time = std::stoll(*expire_value); // 转换为整数时间戳
+
+      // 2. 判断是否过期
+      if (expire_time <= current_time) {
+        // 3. 删除过期键
+        lsm->remove(key);
+        lsm->remove("expire_" + key);
+        // 按键不存在处理
+        return "$-1\r\n"; // RESP: null bulk string
+      }
+    } catch (const std::exception &e) {
+      // 处理转换错误（可选）
+      return "-ERR invalid expire time format\r\n";
+    }
+  }
+
+  // 4. 检查键是否存在
+  auto value = lsm->get(key);
+  if (!value) {
+    return "$-1\r\n"; // RESP: null bulk string
+  }
+
+  // 5. 返回正常值（RESP bulk string 格式）
+  std::string value_str = *value;
+  return "$" + std::to_string(value_str.size()) + "\r\n" + value_str + "\r\n";
 }
 
 std::string RedisWrapper::redis_ttl(std::string &key) {
   // TODO: Lab 6.1 获取一个`key`的剩余过期时间
   // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
-  return ":1\r\n"; // 表示键不存在
+  if (lsm->get(key)) {
+    auto value = lsm->get("expire_" + key);
+    if (value) {
+      return ":" + *value + "\r\n";
+    } else {
+      return ":-1\r\n";
+    }
+  } else {
+    return ":-2\r\n";
+  }
 }
 
 // 哈希操作
