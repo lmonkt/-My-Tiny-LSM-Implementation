@@ -441,22 +441,36 @@ std::string RedisWrapper::redis_expire(const std::string &key,
                                        std::string seconds_count) {
   // TODO: Lab 6.1 设置一个`key`的过期时间
   // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
-  auto value = lsm->get(key);
-  if (!value) {
-    return ":0\r\n"; // 键不存在
-  }
-
+  // 转换时间
+  long seconds;
   try {
-    // 转换为整数并计算绝对过期时间戳
-    long seconds = std::stol(seconds_count);
-    time_t expire_time = std::time(nullptr) + seconds;
-
-    // 存储绝对时间戳
-    lsm->put(get_explire_key(key), std::to_string(expire_time));
-    return ":1\r\n";
+    seconds = std::stol(seconds_count);
   } catch (...) {
     return "-ERR invalid expire time\r\n";
   }
+
+  time_t expire_time = std::time(nullptr) + seconds;
+  std::string expire_val = std::to_string(expire_time);
+
+  // 1. 检查是否存在对应的 Hash Meta Key (优先检查
+  // Hash，或者根据你的系统设计顺序)
+  std::string metaKey = get_hash_meta_key(key);
+  if (auto value = lsm->get(metaKey)) {
+    // 关键点：如果是 Hash，必须将过期时间设置在 metaKey 对应的 expireKey 上
+    // 这样 redis_hset_batch 中的检查逻辑才能读到
+    lsm->put(get_explire_key(metaKey), expire_val);
+    return ":1\r\n";
+  }
+
+  // 2. 检查是否存在普通的 Key (String 类型)
+  // 如果你的系统不仅仅支持 Hash，还支持 String，需要保留这个检查
+  if (auto value = lsm->get(key)) {
+    lsm->put(get_explire_key(key), expire_val);
+    return ":1\r\n";
+  }
+
+  // 3. 键不存在
+  return ":0\r\n";
 }
 
 std::string RedisWrapper::redis_set(std::string &key, std::string &value) {
@@ -529,6 +543,8 @@ std::string RedisWrapper::redis_ttl(std::string &key) {
 std::string RedisWrapper::redis_hset_batch(
     const std::string &key,
     std::vector<std::pair<std::string, std::string>> &field_value_pairs) {
+  // TODO: Lab 6.2 批量设置一个哈希类型的`key`的多个字段值
+  // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
   // We need exclusive lock for writes to the hash meta + fields
   std::unique_lock<std::shared_mutex> wlock(redis_mtx);
   int added_count = 0;
@@ -617,6 +633,8 @@ std::string RedisWrapper::redis_hset_batch(
 std::string RedisWrapper::redis_hset(const std::string &key,
                                      const std::string &field,
                                      const std::string &value) {
+  // TODO: Lab 6.2 设置一个哈希类型的`key`的某个字段值
+  // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
   // We need exclusive lock for writes to the hash meta & field keys
   std::unique_lock<std::shared_mutex> wlock(redis_mtx);
 
@@ -677,20 +695,104 @@ std::string RedisWrapper::redis_hget(const std::string &key,
                                      const std::string &field) {
   // TODO: Lab 6.2 获取一个哈希类型的`key`的某个字段值
   // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
-  return "$-1\r\n";
+  std::shared_lock<std::shared_mutex> rlock(redis_mtx);
+  std::string metaKey = get_hash_meta_key(key);
+  std::string expireKey = get_explire_key(metaKey);
+
+  // 1) TTL check and cleanup if expired
+  if (auto expire_value = lsm->get(expireKey)) {
+    try {
+      time_t current_time = std::time(nullptr);
+      time_t expire_time = std::stoll(*expire_value);
+      if (expire_time <= current_time) {
+        // need to remove metaKey, expireKey and all fields
+        if (auto meta_val = lsm->get(metaKey)) {
+          auto fields = get_fileds_from_hash_value(meta_val);
+          std::vector<std::string> remove_keys;
+          for (auto &f : fields) {
+            remove_keys.push_back(get_hash_filed_key(key, f));
+          }
+          remove_keys.push_back(metaKey);
+          remove_keys.push_back(expireKey);
+          if (!remove_keys.empty())
+            lsm->remove_batch(remove_keys);
+        }
+      }
+      return "$-1\r\n";
+    } catch (...) {
+      return "-ERR invalid expire time format\r\n";
+    }
+  }
+
+  std::string fieldKey = get_hash_filed_key(key, field);
+  auto field_val = lsm->get(fieldKey);
+  if (!field_val) {
+    return "$-1\r\n";
+  }
+  std::string value_str = *field_val;
+  return "$" + std::to_string(value_str.size()) + "\r\n" + value_str + "\r\n";
 }
 
 std::string RedisWrapper::redis_hdel(const std::string &key,
                                      const std::string &field) {
   // TODO: Lab 6.2 删除一个哈希类型的`key`的某个字段
   // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
-  return ":0\r\n";
+  auto get_res = redis_hget(key, field);
+  if (get_res == "$-1\r\n")
+    return ":0\r\n";
+
+  std::unique_lock<std::shared_mutex> wlock(redis_mtx);
+  std::string metaKey = get_hash_meta_key(key);
+  std::string fieldKey = get_hash_filed_key(key, field);
+  lsm->remove(fieldKey);
+
+  return ":1\r\n";
 }
 
 std::string RedisWrapper::redis_hkeys(const std::string &key) {
   // TODO: Lab 6.2 获取一个哈希类型的`key`的所有字段
   // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
-  return "*0\r\n";
+
+  std::shared_lock<std::shared_mutex> rlock(redis_mtx);
+  std::string metaKey = get_hash_meta_key(key);
+  std::string expireKey = get_explire_key(metaKey);
+
+  // 1) TTL check and cleanup if expired
+  if (auto expire_value = lsm->get(expireKey)) {
+    try {
+      time_t current_time = std::time(nullptr);
+      time_t expire_time = std::stoll(*expire_value);
+      if (expire_time <= current_time) {
+        // need to remove metaKey, expireKey and all fields
+        if (auto meta_val = lsm->get(metaKey)) {
+          auto fields = get_fileds_from_hash_value(meta_val);
+          std::vector<std::string> remove_keys;
+          for (auto &f : fields) {
+            remove_keys.push_back(get_hash_filed_key(key, f));
+          }
+          remove_keys.push_back(metaKey);
+          remove_keys.push_back(expireKey);
+          if (!remove_keys.empty())
+            lsm->remove_batch(remove_keys);
+        }
+      }
+      return "*0\r\n";
+    } catch (...) {
+      return "-ERR invalid expire time format\r\n";
+    }
+  }
+
+  std::vector<std::string> meta_fields;
+  if (auto meta_val = lsm->get(metaKey)) {
+    meta_fields = get_fileds_from_hash_value(meta_val);
+    std::string res = "*" + std::to_string(meta_fields.size());
+    for (auto field : meta_fields) {
+      res += ("\r\n$" + std::to_string(field.size()) + "\r\n" + field);
+    }
+    return res + "\r\n";
+  } else {
+    return "*0\r\n";
+  }
 }
 
 // 链表操作
