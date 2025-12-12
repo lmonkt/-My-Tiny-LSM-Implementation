@@ -11,6 +11,7 @@
 #include <shared_mutex>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -162,6 +163,10 @@ inline bool is_value_hash(const std::string &key) {
  *   - 该函数只在语义上帮助判断，不保证该 key 在数据库中实际存在。
  */
 
+inline std::string get_set_key(const std::string &key) {
+  return TomlConfig::getInstance().getRedisSetPrefix() + key;
+}
+
 inline std::string get_explire_key(const std::string &key) {
   return TomlConfig::getInstance().getRedisExpireHeader() + key;
 }
@@ -182,6 +187,56 @@ inline std::string get_explire_key(const std::string &key) {
  * 举例:
  *   如果 RedisExpireHeader 是 "expire_"，key = "foo"，则返回 "expire_foo"。
  */
+
+// 判断 expire 值是否表示过期；
+// 如果传入 error_out 不为空，在解析失败时写入错误信息（RESP 错误格式），
+// 并返回 true（认为过期，便于清理不合理的 expire 记录）。
+static bool is_expired(const std::optional<std::string> &expire_value,
+                       std::string *error_out = nullptr) {
+  if (!expire_value.has_value())
+    return false;
+  try {
+    time_t now = std::time(nullptr);
+    time_t expire_time = std::stoll(*expire_value);
+    return expire_time <= now;
+  } catch (...) {
+    if (error_out)
+      *error_out = "-ERR invalid expire time format\r\n";
+    // Treat invalid expire format as expired so cleanup routines can remove the
+    // stale/invalid entries.
+    return true;
+  }
+}
+
+bool RedisWrapper::expire_set_clean(
+    const std::string &key, std::shared_lock<std::shared_mutex> &rlock) {
+  std::string expire_key = get_explire_key(key);
+  auto expire_query = this->lsm->get(expire_key);
+  if (is_expired(expire_query, nullptr)) {
+    // set都过期了, 需要删除set
+    // 先升级锁
+    rlock.unlock();                                       // 解锁读锁
+    std::unique_lock<std::shared_mutex> wlock(redis_mtx); // 写锁
+    lsm->remove(get_set_key(key));
+    lsm->remove(expire_key);
+    auto preffix = get_set_key(key);
+    auto result_elem = this->lsm->lsm_iters_monotony_predicate(
+        0, [&preffix](const std::string &elem) {
+          return -elem.compare(0, preffix.size(), preffix);
+        });
+    if (result_elem.has_value()) {
+      auto [elem_begin, elem_end] = result_elem.value();
+      std::vector<std::string> remove_vec;
+      for (; elem_begin != elem_end; ++elem_begin) {
+        remove_vec.push_back(elem_begin->first);
+      }
+      lsm->remove_batch(remove_vec);
+    }
+    return true;
+  }
+  return false;
+}
+
 RedisWrapper::RedisWrapper(const std::string &db_path) {
   this->lsm = std::make_unique<LSM>(db_path);
 }
@@ -879,28 +934,184 @@ std::string RedisWrapper::redis_zrank(const std::string &key,
 std::string RedisWrapper::redis_sadd(std::vector<std::string> &args) {
   // TODO: Lab 6.3 如果集合不存在则新建，添加一个元素到集合中
   // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
-  return ":1\r\n";
+  std::shared_lock<std::shared_mutex> rlock(redis_mtx);
+  auto falg = expire_set_clean(args[1], rlock);
+  rlock.unlock();
+
+  std::unique_lock<std::shared_mutex> wlock(redis_mtx);
+
+  std::string set_raw_key = args[1];
+  std::string set_meta_key = get_set_key(set_raw_key);
+
+  std::unordered_set<std::string> distinct_args;
+  for (int i = 2; i < args.size(); ++i) {
+    distinct_args.emplace(set_meta_key + "_" + args[i]);
+  }
+
+  std::vector<std::string> key_vector;
+  key_vector.emplace_back(set_meta_key);
+
+  for (std::string k : distinct_args) {
+    key_vector.emplace_back(k);
+  }
+
+  auto get_vector = lsm->get_batch(key_vector);
+
+  int current_size = 0;
+  if (get_vector[0].second && !get_vector[0].second->empty()) {
+    try {
+      current_size = std::stoi(*get_vector[0].second);
+    } catch (...) {
+      current_size = 0; // 防御性编程
+    }
+  }
+
+  std::vector<std::pair<std::string, std::string>> to_put;
+  int added_count = 0;
+
+  for (int i = 1; i < get_vector.size(); ++i) {
+    if (get_vector[i].second && !get_vector[i].second->empty())
+      continue;
+    to_put.emplace_back(get_vector[i].first, "1");
+    added_count++;
+  }
+
+  if (added_count > 0) {
+    auto new_size = current_size + added_count;
+    to_put.emplace_back(set_meta_key, std::to_string(new_size));
+    lsm->put_batch(to_put);
+  }
+
+  return ":" + std::to_string(added_count) + "\r\n";
 }
 
 std::string RedisWrapper::redis_srem(std::vector<std::string> &args) {
   // TODO: Lab 6.3 删除集合中的元素
-  int removed_count = 0;
-  return ":" + std::to_string(removed_count) + "\r\n";
+
+  std::shared_lock<std::shared_mutex> rlock(redis_mtx);
+  auto falg = expire_set_clean(args[1], rlock);
+  rlock.unlock();
+
+  std::unique_lock<std::shared_mutex> wlock(redis_mtx);
+
+  std::string set_raw_key = args[1];
+  std::string set_meta_key = get_set_key(set_raw_key);
+
+  std::unordered_set<std::string> distinct_args;
+  for (int i = 2; i < args.size(); ++i) {
+    distinct_args.emplace(set_meta_key + "_" + args[i]);
+  }
+
+  // 构建批量查询，同时查 Size 和 Member
+  std::vector<std::string> key_vector;
+  key_vector.emplace_back(set_meta_key); // Index 0: Size
+  for (const auto &k : distinct_args) {
+    key_vector.emplace_back(k);
+  }
+
+  auto get_vector = lsm->get_batch(key_vector);
+
+  int current_size = 0;
+  if (!get_vector[0].second || get_vector[0].second->empty()) {
+    return ":0\r\n";
+  } else {
+    try {
+      current_size = std::stoi(*get_vector[0].second);
+    } catch (...) {
+      return ":0\r\n";
+    }
+  }
+
+  std::vector<std::string> to_remove;
+  int remove_count = 0;
+
+  for (int i = 1; i < get_vector.size(); ++i) {
+    // 只有存在的元素才需要删除
+    if (get_vector[i].second && !get_vector[i].second->empty()) {
+      to_remove.emplace_back(get_vector[i].first);
+      remove_count++;
+    }
+  }
+
+  if (remove_count > 0) {
+    auto new_size = current_size - remove_count;
+    if (new_size > 0) {
+      lsm->put(set_meta_key, std::to_string(new_size));
+    } else {
+      // 如果删光了，把元数据也删掉 (Redis 语义：空集合会自动删除)
+      to_remove.emplace_back(set_meta_key);
+    }
+    lsm->remove_batch(to_remove);
+  }
+
+  return ":" + std::to_string(remove_count) + "\r\n";
 }
 
 std::string RedisWrapper::redis_sismember(const std::string &key,
                                           const std::string &member) {
   // TODO: Lab 6.3 判断集合中是否存在某个元素
-  return ":1\r\n";
+  std::shared_lock<std::shared_mutex> rlock(redis_mtx);
+  auto falg = expire_set_clean(key, rlock);
+
+  std::string set_key = get_set_key(key) + "_" + member;
+  auto res = lsm->get(set_key);
+  if (res)
+    return ":1\r\n";
+  else
+    return ":0\r\n";
 }
 
 std::string RedisWrapper::redis_scard(const std::string &key) {
   // TODO: Lab 6.3 获取集合的元素个数
-  return ":1\r\n";
+  std::shared_lock<std::shared_mutex> rlock(redis_mtx);
+  auto falg = expire_set_clean(key, rlock);
+
+  std::string set_meta_key = get_set_key(key);
+  auto current_size_it = lsm->get(set_meta_key);
+
+  if (!current_size_it || current_size_it->empty()) {
+    return ":0\r\n";
+  } else {
+    // 直接返回存储的字符串，无需转换 int 再转回 string
+    return ":" + *current_size_it + "\r\n";
+  }
 }
 
 std::string RedisWrapper::redis_smembers(const std::string &key) {
   // TODO: Lab 6.3 获取集合的所有元素
-  return "*0\r\n";
+  std::shared_lock<std::shared_mutex> rlock(redis_mtx);
+  expire_set_clean(key, rlock); // SMEMBERS 是只读的，保持读锁即可
+
+  std::string set_meta_key = get_set_key(key);
+
+  auto prefix_predicate = [set_meta_key](const std::string &key) -> int {
+    std::string prefix = set_meta_key;    // 替换为实际前缀
+    return key.find(prefix) == 0 ? 0 : 1; // 以 prefix 开头返回 0，否则 1
+  };
+
+  auto values = lsm->lsm_iters_monotony_predicate(0, prefix_predicate);
+  if (!values)
+    return "*0\r\n";
+
+  int prefix_len = set_meta_key.size() + 1;
+  int element_count = 0;
+  std::string res;
+
+  for (auto i = values->first; i != values->second; ++i) {
+    // !!! 修复点：防止迭代器扫到元数据 Key 本身
+    // 如果 Key 是 "Set:myset"，长度比 "Set:myset_" 短，substr 会崩溃
+    if (i->first.size() < prefix_len)
+      continue;
+
+    // 过滤掉 Value 为空（墓碑）的记录
+    if (i->second.empty())
+      continue;
+
+    ++element_count;
+    auto member = i->first.substr(prefix_len);
+    res += "$" + std::to_string(member.size()) + "\r\n" + member + "\r\n";
+  }
+
+  return "*" + std::to_string(element_count) + "\r\n" + res;
 }
 } // namespace tiny_lsm

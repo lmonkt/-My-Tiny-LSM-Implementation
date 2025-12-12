@@ -13,6 +13,8 @@ inline std::string get_hash_filed_key(const std::string &key,
 
 inline bool is_value_hash(const std::string &key);
 
+inline std::string get_set_key(const std::string &key);
+
 inline std::string get_explire_key(const std::string &key);
 
 class RedisWrapper {
@@ -105,5 +107,9 @@ private:
                               const std::string &member);
   std::string redis_scard(const std::string &key);
   std::string redis_smembers(const std::string &key);
+
+  // 工具函数
+  bool expire_set_clean(const std::string &key,
+                        std::shared_lock<std::shared_mutex> &rlock);
 };
 } // namespace tiny_lsm
