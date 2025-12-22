@@ -163,8 +163,22 @@ inline bool is_value_hash(const std::string &key) {
  *   - 该函数只在语义上帮助判断，不保证该 key 在数据库中实际存在。
  */
 
+inline std::string encode_score(std::string raw_score) {
+  std::string res = raw_score;
+  if (res.size() > 6) {
+    throw std::runtime_error("The score is too long (bit >6)");
+  } else {
+    res.insert(res.begin(), 6 - res.size(), '0');
+  }
+  return res;
+}
+
 inline std::string get_set_key(const std::string &key) {
   return TomlConfig::getInstance().getRedisSetPrefix() + key;
+}
+
+inline std::string get_sorted_set_key(const std::string &key) {
+  return TomlConfig::getInstance().getRedisSortedSetPrefix() + key;
 }
 
 inline std::string get_explire_key(const std::string &key) {
@@ -235,6 +249,87 @@ bool RedisWrapper::expire_set_clean(
     return true;
   }
   return false;
+}
+
+bool RedisWrapper::expire_sorted_set_clean(
+    const std::string &key, std::shared_lock<std::shared_mutex> &rlock) {
+  std::string expire_key = get_explire_key(key);
+  auto expire_query = this->lsm->get(expire_key);
+  if (is_expired(expire_query, nullptr)) {
+    // 有序set都过期了, 需要删除
+    // 先升级锁
+    rlock.unlock();                                       // 解锁读锁
+    std::unique_lock<std::shared_mutex> wlock(redis_mtx); // 写锁
+    lsm->remove(get_sorted_set_key(key));
+    lsm->remove(expire_key);
+    auto preffix = get_sorted_set_key(key);
+    auto result_elem = this->lsm->lsm_iters_monotony_predicate(
+        0, [&preffix](const std::string &elem) {
+          return -elem.compare(0, preffix.size(), preffix);
+        });
+    if (result_elem.has_value()) {
+      auto [elem_begin, elem_end] = result_elem.value();
+      std::vector<std::string> remove_vec;
+      for (; elem_begin != elem_end; ++elem_begin) {
+        remove_vec.push_back(elem_begin->first);
+      }
+      lsm->remove_batch(remove_vec);
+    }
+    return true;
+  }
+  return false;
+}
+
+inline std::string get_zset_meta_key(const std::string &raw_key) {
+  return get_sorted_set_key(raw_key);
+}
+
+inline std::string get_zset_member_key(const std::string &meta_key,
+                                       const std::string &member) {
+  return meta_key + ":MEMBER:" + member;
+}
+
+inline std::string get_zset_score_key(const std::string &meta_key,
+                                      const std::string &score_encoded,
+                                      const std::string &member) {
+  return meta_key + ":SCORE:" + score_encoded + ":" + member;
+}
+
+// 2. 分数编码 (保持原有逻辑，但封装好)
+inline std::string encode_score_padded(const std::string &raw_score) {
+  if (raw_score.size() > 6)
+    throw std::runtime_error("Score too long");
+  std::string res = raw_score;
+  res.insert(res.begin(), 6 - res.size(), '0');
+  return res;
+}
+
+// 3. 安全的类型转换 (避免满屏 try-catch)
+inline int safe_stoi(const std::string &s, int default_val) {
+  try {
+    return std::stoi(s);
+  } catch (...) {
+    return default_val;
+  }
+}
+
+// 4. 获取 ZSet 大小 (复用逻辑)
+int RedisWrapper::get_zset_size(const std::string &meta_key) {
+  auto res = lsm->get(meta_key);
+  return res ? safe_stoi(*res) : 0;
+}
+
+// 5. 写操作前的通用准备 (检查过期 + 获取写锁)
+// 注意：这里我们返回一个 unique_lock，利用 RAII 管理锁的生命周期
+std::unique_lock<std::shared_mutex>
+RedisWrapper::prepare_write_operation(const std::string &key) {
+  // 1. 先用读锁检查过期
+  std::shared_lock<std::shared_mutex> rlock(redis_mtx);
+  bool expired = expire_sorted_set_clean(key, rlock); // 你的原始函数
+  rlock.unlock();
+
+  // 2. 获取写锁
+  return std::unique_lock<std::shared_mutex>(redis_mtx);
 }
 
 RedisWrapper::RedisWrapper(const std::string &db_path) {
@@ -893,42 +988,287 @@ std::string RedisWrapper::redis_lrange(const std::string &key, int start,
 std::string RedisWrapper::redis_zadd(std::vector<std::string> &args) {
   // TODO: Lab 6.4 如果有序集合不存在则新建，添加一个元素到有序集合中
   // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
-  return ":1\r\n";
+  auto wlock = prepare_write_operation(args[1]);
+  std::string meta_key = get_zset_meta_key(args[1]);
+
+  std::unordered_map<std::string, std::string> distinct_updates;
+  for (size_t i = 2; i < args.size(); i += 2) {
+    distinct_updates[args[i + 1]] = args[i]; // key: member, value: score
+  }
+
+  std::vector<std::string> db_queries;
+  std::vector<std::string> query_members;
+
+  // 0号位置留给 Meta Size
+  db_queries.push_back(meta_key);
+  // query_members 0号位置可以放空，或者不使用，保持对齐即可
+  query_members.push_back("");
+
+  for (const auto &[member, score] : distinct_updates) {
+    db_queries.push_back(get_zset_member_key(meta_key, member));
+    query_members.push_back(member); // <--- 直接存下来，后面直接用
+  }
+
+  auto batch_res = lsm->get_batch(db_queries);
+
+  int current_size = 0;
+  if (batch_res[0].second)
+    current_size = safe_stoi(*batch_res[0].second);
+
+  std::vector<std::pair<std::string, std::string>> to_put;
+  std::vector<std::string> to_remove;
+  int added_count = 0;
+
+  // === 步骤 4: 处理结果 ===
+  // 直接遍历 batch_res，从 1 开始
+  for (size_t i = 1; i < batch_res.size(); ++i) {
+    // 这里的 i 直接对应 query_members[i]，不需要任何数学计算
+    std::string member = query_members[i];            // <--- 极其清晰
+    std::string new_score = distinct_updates[member]; // 从 Map 取新分数
+
+    // 检查旧值
+    if (batch_res[i].second) {
+      std::string old_score = *batch_res[i].second;
+      if (old_score != new_score) {
+        // 分数变了，移除旧索引
+        to_remove.push_back(get_zset_score_key(
+            meta_key, encode_score_padded(old_score), member));
+      } else {
+        continue; // 没变，跳过
+      }
+    } else {
+      added_count++; // 新元素
+    }
+
+    // 添加新索引
+    to_put.emplace_back(get_zset_member_key(meta_key, member), new_score);
+    to_put.emplace_back(
+        get_zset_score_key(meta_key, encode_score_padded(new_score), member),
+        member);
+  }
+
+  // === 步骤 5: 提交 ===
+  if (added_count > 0) {
+    to_put.emplace_back(meta_key, std::to_string(current_size + added_count));
+  }
+
+  if (!to_remove.empty())
+    lsm->remove_batch(to_remove);
+  if (!to_put.empty())
+    lsm->put_batch(to_put);
+
+  return ":" + std::to_string(added_count) + "\r\n";
 }
 
 std::string RedisWrapper::redis_zrem(std::vector<std::string> &args) {
   // TODO: Lab 6.4 删除有序集合中的元素
+  auto wlock = prepare_write_operation(args[1]);
+  std::string meta_key = get_zset_meta_key(args[1]);
+
+  // 1. 准备查询
+  std::vector<std::string> members_to_query;
+  members_to_query.push_back(meta_key);
+  // 去重 args 中的 member
+  std::unordered_set<std::string> distinct_members;
+  for (size_t i = 2; i < args.size(); ++i)
+    distinct_members.insert(args[i]);
+
+  for (const auto &m : distinct_members) {
+    members_to_query.push_back(get_zset_member_key(meta_key, m));
+  }
+
+  // 2. 批量查询
+  auto batch_res = lsm->get_batch(members_to_query);
+  int current_size =
+      (batch_res[0].second) ? safe_stoi(*batch_res[0].second) : 0;
+
+  std::vector<std::string> to_remove;
   int removed_count = 0;
+
+  // 3. 构建删除列表
+  // batch_res[1...] 对应 distinct_members 的迭代顺序
+  int idx = 1;
+  for (const auto &member : distinct_members) {
+    if (batch_res[idx].second) { // 存在
+      std::string old_score = *batch_res[idx].second;
+      // 删除 Score 索引
+      to_remove.push_back(
+          get_zset_score_key(meta_key, encode_score_padded(old_score), member));
+      // 删除 Member 索引
+      to_remove.push_back(batch_res[idx].first);
+      removed_count++;
+    }
+    idx++;
+  }
+
+  // 4. 更新 Size 或删除整个 Meta
+  if (removed_count > 0) {
+    int new_size = current_size - removed_count;
+    if (new_size > 0) {
+      lsm->put(meta_key, std::to_string(new_size));
+    } else {
+      to_remove.push_back(meta_key); // 空集合自动删除
+    }
+    lsm->remove_batch(to_remove);
+  }
+
   return ":" + std::to_string(removed_count) + "\r\n";
 }
 
 std::string RedisWrapper::redis_zrange(std::vector<std::string> &args) {
   // TODO: Lab 6.4 获取有序集合中指定范围内的元素
-  return "*0\r\n";
+  std::shared_lock<std::shared_mutex> rlock(redis_mtx);
+  expire_sorted_set_clean(args[1], rlock);
+
+  std::string meta_key = get_zset_meta_key(args[1]);
+  int size = get_zset_size(meta_key);
+
+  int start = safe_stoi(args[2]);
+  int end = safe_stoi(args[3]);
+
+  // 处理负数索引
+  if (start < 0)
+    start = size + start;
+  if (end < 0)
+    end = size + end;
+
+  // 边界检查
+  if (start < 0)
+    start = 0;
+  if (end >= size)
+    end = size - 1;
+  if (start > end || size == 0)
+    return "*0\r\n";
+
+  std::string search_prefix = meta_key + ":SCORE:";
+
+  auto result_elem = lsm->lsm_iters_monotony_predicate(
+      0, [&search_prefix](const std::string &elem) {
+        return -elem.compare(0, search_prefix.size(), search_prefix);
+      });
+
+  auto it = result_elem->first;
+  auto it_end = result_elem->second;
+
+  std::string res_body;
+  int count = 0;
+  int current_idx = 0;
+
+  // 迭代
+  for (; it != it_end; ++it) {
+    if (it->second.empty())
+      continue; // 跳过墓碑
+
+    // 这里其实还是 O(N) 遍历，对于 LSM 这种结构没有 rank 索引很难做到 O(logN)
+    if (current_idx >= start && current_idx <= end) {
+      std::string member = it->second;
+      res_body +=
+          "$" + std::to_string(member.size()) + "\r\n" + member + "\r\n";
+      count++;
+    }
+
+    if (current_idx > end)
+      break; // 提前结束
+    current_idx++;
+  }
+
+  return "*" + std::to_string(count) + "\r\n" + res_body;
 }
 
 std::string RedisWrapper::redis_zcard(const std::string &key) {
   // TODO: Lab 6.4 获取有序集合的元素个数
-  return ":1\r\n";
+  std::shared_lock<std::shared_mutex> rlock(redis_mtx);
+  auto falg = expire_sorted_set_clean(key, rlock);
+
+  int size = get_zset_size(get_zset_meta_key(key));
+  return ":" + std::to_string(size) + "\r\n";
 }
 
 std::string RedisWrapper::redis_zscore(const std::string &key,
                                        const std::string &elem) {
   // TODO: Lab 6.4 获取有序集合中元素的分数
-  return "$-1\r\n";
+  std::shared_lock<std::shared_mutex> rlock(redis_mtx);
+  auto falg = expire_sorted_set_clean(key, rlock);
+
+  std::string member_key = get_zset_member_key(get_zset_meta_key(key), elem);
+  auto res = lsm->get(member_key);
+
+  if (!res)
+    return "$-1\r\n";
+  return "$" + std::to_string(res->size()) + "\r\n" + *res + "\r\n";
 }
 
 std::string RedisWrapper::redis_zincrby(const std::string &key,
                                         const std::string &increment,
                                         const std::string &elem) {
   // TODO: Lab 6.4 对有序集合中元素的分数进行增加
-  return "$-1\r\n";
+  auto wlock = prepare_write_operation(key);
+  std::string meta_key = get_zset_meta_key(key);
+  std::string member_key = get_zset_member_key(meta_key, elem);
+
+  // 查旧值
+  auto old_score_opt = lsm->get(member_key);
+  int old_score_val = 0;
+  bool exists = false;
+
+  if (old_score_opt) {
+    old_score_val = safe_stoi(*old_score_opt);
+    exists = true;
+  }
+
+  int incr_val = safe_stoi(increment);
+  int new_score_val = old_score_val + incr_val;
+  std::string new_score_str = std::to_string(new_score_val);
+
+  std::vector<std::pair<std::string, std::string>> to_put;
+
+  // 如果存在，需要删掉旧的 Score 索引
+  if (exists) {
+    lsm->remove(get_zset_score_key(meta_key,
+                                   encode_score_padded(*old_score_opt), elem));
+  } else {
+    // 不存在，需要更新 Size
+    int size = get_zset_size(meta_key);
+    to_put.emplace_back(meta_key, std::to_string(size + 1));
+  }
+
+  // 添加新值
+  to_put.emplace_back(member_key, new_score_str);
+  to_put.emplace_back(
+      get_zset_score_key(meta_key, encode_score_padded(new_score_str), elem),
+      elem);
+
+  lsm->put_batch(to_put);
+
+  return ":" + new_score_str + "\r\n";
 }
 
 std::string RedisWrapper::redis_zrank(const std::string &key,
                                       const std::string &elem) {
   //  TODO: Lab 6.4 获取有序集合中元素的排名
-  return "$-1\r\n";
+  std::shared_lock<std::shared_mutex> rlock(redis_mtx);
+  expire_sorted_set_clean(key, rlock);
+
+  std::string meta_key = get_zset_meta_key(key);
+  std::string search_prefix = meta_key + ":SCORE:";
+
+  auto iter_pair =
+      lsm->lsm_iters_monotony_predicate(0, [&](const std::string &k) {
+        return k.compare(0, search_prefix.size(), search_prefix) == 0;
+      });
+
+  int rank = 0;
+  for (auto it = iter_pair->first; it != iter_pair->second; ++it) {
+    if (it->second.empty())
+      continue;
+
+    if (it->second == elem) {
+      return ":" + std::to_string(rank) + "\r\n";
+    }
+    rank++;
+  }
+
+  return "$-1\r\n"; // Not found
 }
 
 std::string RedisWrapper::redis_sadd(std::vector<std::string> &args) {

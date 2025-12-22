@@ -1,6 +1,9 @@
 #pragma once
 #include "../lsm/engine.h"
 #include <memory>
+#include <string>
+#include <shared_mutex>
+#include <mutex>
 
 namespace tiny_lsm {
 std::vector<std::string>
@@ -13,9 +16,32 @@ inline std::string get_hash_filed_key(const std::string &key,
 
 inline bool is_value_hash(const std::string &key);
 
+inline std::string encode_score(std::string raw_score);
+
 inline std::string get_set_key(const std::string &key);
 
+inline std::string get_sorted_set_key(const std::string &key);
+
+inline std::string sorted_set_score_to_member(const std::string &score_key);
+
+inline std::string
+sorted_set_score_member_to_member(const std::string &member_key);
+
 inline std::string get_explire_key(const std::string &key);
+
+// zset helpers
+inline std::string get_zset_meta_key(const std::string &raw_key);
+
+inline std::string get_zset_member_key(const std::string &meta_key,
+                                       const std::string &member);
+
+inline std::string get_zset_score_key(const std::string &meta_key,
+                                      const std::string &score_encoded,
+                                      const std::string &member);
+
+// score encoding and safe conversions
+inline std::string encode_score_padded(const std::string &raw_score);
+inline int safe_stoi(const std::string &s, int default_val = 0);
 
 class RedisWrapper {
 private:
@@ -111,5 +137,12 @@ private:
   // 工具函数
   bool expire_set_clean(const std::string &key,
                         std::shared_lock<std::shared_mutex> &rlock);
+
+  bool expire_sorted_set_clean(const std::string &key,
+                               std::shared_lock<std::shared_mutex> &rlock);
+
+  // zset utilities
+  int get_zset_size(const std::string &meta_key);
+  std::unique_lock<std::shared_mutex> prepare_write_operation(const std::string &key);
 };
 } // namespace tiny_lsm
