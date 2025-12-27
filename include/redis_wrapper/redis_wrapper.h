@@ -1,10 +1,11 @@
 #pragma once
 #include "../lsm/engine.h"
+#include <cstdint>
 #include <memory>
-#include <string>
-#include <shared_mutex>
 #include <mutex>
-
+#include <shared_mutex>
+#include <string>
+const uint64_t INITIAL_ID = 0x8000000000000000;
 namespace tiny_lsm {
 std::vector<std::string>
 get_fileds_from_hash_value(const std::optional<std::string> &field_list_opt);
@@ -28,6 +29,15 @@ inline std::string
 sorted_set_score_member_to_member(const std::string &member_key);
 
 inline std::string get_explire_key(const std::string &key);
+
+// list helpers
+inline std::string get_list_key(const std::string &key);
+
+// expire/list helpers
+
+// fixed64 utilities
+void EncodeFixed64(uint64_t value, std::string &dst);
+uint64_t DecodeFixed64(const std::string &data);
 
 // zset helpers
 inline std::string get_zset_meta_key(const std::string &raw_key);
@@ -141,8 +151,14 @@ private:
   bool expire_sorted_set_clean(const std::string &key,
                                std::shared_lock<std::shared_mutex> &rlock);
 
+  bool expire_list_clean(const std::string &key,
+                         std::shared_lock<std::shared_mutex> &rlock);
+  std::unique_lock<std::shared_mutex>
+  prepare_list_write_operation(const std::string &key);
+
   // zset utilities
   int get_zset_size(const std::string &meta_key);
-  std::unique_lock<std::shared_mutex> prepare_write_operation(const std::string &key);
+  std::unique_lock<std::shared_mutex>
+  prepare_write_operation(const std::string &key);
 };
 } // namespace tiny_lsm

@@ -181,6 +181,10 @@ inline std::string get_sorted_set_key(const std::string &key) {
   return TomlConfig::getInstance().getRedisSortedSetPrefix() + key;
 }
 
+inline std::string get_list_key(const std::string &key) {
+  return "REDIS_LIST_" + key;
+}
+
 inline std::string get_explire_key(const std::string &key) {
   return TomlConfig::getInstance().getRedisExpireHeader() + key;
 }
@@ -330,6 +334,75 @@ RedisWrapper::prepare_write_operation(const std::string &key) {
 
   // 2. 获取写锁
   return std::unique_lock<std::shared_mutex>(redis_mtx);
+}
+
+bool RedisWrapper::expire_list_clean(
+    const std::string &key, std::shared_lock<std::shared_mutex> &rlock) {
+  std::string expire_key = get_explire_key(key);
+  auto expire_query = this->lsm->get(expire_key);
+  if (is_expired(expire_query, nullptr)) {
+    // 有序set都过期了, 需要删除
+    // 先升级锁
+    rlock.unlock();                                       // 解锁读锁
+    std::unique_lock<std::shared_mutex> wlock(redis_mtx); // 写锁
+    lsm->remove(get_list_key(key));
+    lsm->remove(expire_key);
+    auto preffix = get_list_key(key);
+    auto result_elem = this->lsm->lsm_iters_monotony_predicate(
+        0, [&preffix](const std::string &elem) {
+          return -elem.compare(0, preffix.size(), preffix);
+        });
+    if (result_elem.has_value()) {
+      auto [elem_begin, elem_end] = result_elem.value();
+      std::vector<std::string> remove_vec;
+      for (; elem_begin != elem_end; ++elem_begin) {
+        remove_vec.push_back(elem_begin->first);
+      }
+      lsm->remove_batch(remove_vec);
+    }
+    return true;
+  }
+  return false;
+}
+
+std::unique_lock<std::shared_mutex>
+RedisWrapper::prepare_list_write_operation(const std::string &key) {
+  // 1. 先用读锁检查过期
+  std::shared_lock<std::shared_mutex> rlock(redis_mtx);
+  bool expired = expire_list_clean(key, rlock);
+  rlock.unlock();
+
+  // 2. 获取写锁
+  return std::unique_lock<std::shared_mutex>(redis_mtx);
+}
+
+void EncodeFixed64(uint64_t value, std::string &dst) {
+  // 预留空间，避免多次内存分配
+  // dst.reserve(dst.size() + 8);
+  char buf[8];
+  buf[0] = static_cast<char>((value >> 56) & 0xff);
+  buf[1] = static_cast<char>((value >> 48) & 0xff);
+  buf[2] = static_cast<char>((value >> 40) & 0xff);
+  buf[3] = static_cast<char>((value >> 32) & 0xff);
+  buf[4] = static_cast<char>((value >> 24) & 0xff);
+  buf[5] = static_cast<char>((value >> 16) & 0xff);
+  buf[6] = static_cast<char>((value >> 8) & 0xff);
+  buf[7] = static_cast<char>(value & 0xff);
+  dst.append(buf, 8);
+}
+
+// 将 8字节的大端序字符串 解码为 uint64_t
+uint64_t DecodeFixed64(const std::string &data) {
+  if (data.size() < 8)
+    return 0; // 简单的错误保护
+  const uint8_t *ptr = reinterpret_cast<const uint8_t *>(data.data());
+  return (static_cast<uint64_t>(ptr[0]) << 56) |
+         (static_cast<uint64_t>(ptr[1]) << 48) |
+         (static_cast<uint64_t>(ptr[2]) << 40) |
+         (static_cast<uint64_t>(ptr[3]) << 32) |
+         (static_cast<uint64_t>(ptr[4]) << 24) |
+         (static_cast<uint64_t>(ptr[5]) << 16) |
+         (static_cast<uint64_t>(ptr[6]) << 8) | static_cast<uint64_t>(ptr[7]);
 }
 
 RedisWrapper::RedisWrapper(const std::string &db_path) {
@@ -950,39 +1023,276 @@ std::string RedisWrapper::redis_lpush(const std::string &key,
                                       const std::string &value) {
   // TODO: Lab 6.5 新建一个链表类型的`key`，并添加一个元素到链表头部
   // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
-  return ":" + std::to_string(1) + "\r\n";
+  auto wlock = prepare_list_write_operation(key);
+  std::string meta_key = get_list_key(key);
+
+  std::string query_meta_key = "M:" + meta_key;
+  auto exist = lsm->get(query_meta_key);
+
+  uint64_t head, tail, length;
+  std::vector<std::pair<std::string, std::string>> to_put;
+
+  if (!exist) {
+    head = INITIAL_ID;
+    tail = INITIAL_ID;
+    length = 0;
+  } else {
+    const std::string &raw_meta = exist.value();
+    if (raw_meta.size() < 24) {
+      return "-ERR internal data corrupted\r\n";
+    }
+    head = DecodeFixed64(raw_meta.substr(0, 8));
+    tail = DecodeFixed64(raw_meta.substr(8, 8));
+    length = DecodeFixed64(raw_meta.substr(16, 8));
+  }
+  head -= 1;
+  length += 1;
+
+  std::string data_key = "D:" + meta_key;
+  EncodeFixed64(head, data_key);
+
+  std::string meta_value;
+  meta_value.reserve(24);
+  EncodeFixed64(head, meta_value);
+  EncodeFixed64(tail, meta_value);
+  EncodeFixed64(length, meta_value);
+
+  to_put.emplace_back(data_key, value);
+  to_put.emplace_back(query_meta_key, meta_value);
+  lsm->put_batch(to_put);
+
+  return ":" + std::to_string(length) + "\r\n";
 }
 
 std::string RedisWrapper::redis_rpush(const std::string &key,
                                       const std::string &value) {
   // TODO: Lab 6.5 新建一个链表类型的`key`，并添加一个元素到链表尾部
   // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
-  return ":" + std::to_string(1) + "\r\n";
+  auto wlock = prepare_list_write_operation(key);
+  std::string meta_key = get_list_key(key);
+
+  std::string query_meta_key = "M:" + meta_key;
+  auto exist = lsm->get(query_meta_key);
+
+  uint64_t head, tail, length;
+  std::vector<std::pair<std::string, std::string>> to_put;
+
+  if (!exist) {
+    head = INITIAL_ID;
+    tail = INITIAL_ID;
+    length = 0;
+  } else {
+    const std::string &raw_meta = exist.value();
+    if (raw_meta.size() < 24) {
+      return "-ERR internal data corrupted\r\n";
+    }
+    head = DecodeFixed64(raw_meta.substr(0, 8));
+    tail = DecodeFixed64(raw_meta.substr(8, 8));
+    length = DecodeFixed64(raw_meta.substr(16, 8));
+  }
+  length += 1;
+
+  std::string data_key = "D:" + meta_key;
+  EncodeFixed64(tail++, data_key);
+
+  std::string meta_value;
+  meta_value.reserve(24);
+  EncodeFixed64(head, meta_value);
+  EncodeFixed64(tail, meta_value);
+  EncodeFixed64(length, meta_value);
+
+  to_put.emplace_back(data_key, value);
+  to_put.emplace_back(query_meta_key, meta_value);
+  lsm->put_batch(to_put);
+
+  return ":" + std::to_string(length) + "\r\n";
 }
 
 std::string RedisWrapper::redis_lpop(const std::string &key) {
   // TODO: Lab 6.5 获取一个链表类型的`key`的头部元素
   // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
-  return "$-1\r\n"; // 表示链表不存在
+  auto wlock = prepare_list_write_operation(key);
+  std::string meta_key = get_list_key(key);
+
+  std::string query_meta_key = "M:" + meta_key;
+  auto exist = lsm->get(query_meta_key);
+
+  uint64_t head, tail, length;
+  std::vector<std::pair<std::string, std::string>> to_put;
+
+  if (!exist) {
+    return "$-1\r\n";
+  } else {
+    const std::string &raw_meta = exist.value();
+    if (raw_meta.size() < 24) {
+      return "-ERR internal data corrupted\r\n";
+    }
+    head = DecodeFixed64(raw_meta.substr(0, 8));
+    tail = DecodeFixed64(raw_meta.substr(8, 8));
+    length = DecodeFixed64(raw_meta.substr(16, 8));
+  }
+
+  std::string data_key = "D:" + meta_key;
+  EncodeFixed64(head, data_key);
+
+  auto value = lsm->get(data_key);
+
+  lsm->remove(data_key);
+
+  ++head;
+  --length;
+
+  std::string meta_value;
+  meta_value.reserve(24);
+  EncodeFixed64(head, meta_value);
+  EncodeFixed64(tail, meta_value);
+  EncodeFixed64(length, meta_value);
+
+  lsm->put(query_meta_key, meta_value);
+
+  if (!value) {
+    return "$-1\r\n";
+  } else {
+    return "$" + std::to_string(value.value().size()) + "\r\n" + value.value() +
+           "\r\n";
+  }
 }
 
 std::string RedisWrapper::redis_rpop(const std::string &key) {
   // TODO: Lab 6.5 获取一个链表类型的`key`的尾部元素
   // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
-  return "$-1\r\n"; // 表示链表不存在
+  auto wlock = prepare_list_write_operation(key);
+  std::string meta_key = get_list_key(key);
+
+  std::string query_meta_key = "M:" + meta_key;
+  auto exist = lsm->get(query_meta_key);
+
+  uint64_t head, tail, length;
+  std::vector<std::pair<std::string, std::string>> to_put;
+
+  if (!exist) {
+    return "$-1\r\n";
+  } else {
+    const std::string &raw_meta = exist.value();
+    if (raw_meta.size() < 24) {
+      return "-ERR internal data corrupted\r\n";
+    }
+    head = DecodeFixed64(raw_meta.substr(0, 8));
+    tail = DecodeFixed64(raw_meta.substr(8, 8));
+    length = DecodeFixed64(raw_meta.substr(16, 8));
+  }
+
+  std::string data_key = "D:" + meta_key;
+  EncodeFixed64(--tail, data_key);
+
+  auto value = lsm->get(data_key);
+
+  lsm->remove(data_key);
+
+  --length;
+
+  std::string meta_value;
+  meta_value.reserve(24);
+  EncodeFixed64(head, meta_value);
+  EncodeFixed64(tail, meta_value);
+  EncodeFixed64(length, meta_value);
+
+  lsm->put(query_meta_key, meta_value);
+
+  if (!value) {
+    return "$-1\r\n";
+  } else {
+    return "$" + std::to_string(value.value().size()) + "\r\n" + value.value() +
+           "\r\n";
+  }
 }
 
 std::string RedisWrapper::redis_llen(const std::string &key) {
   // TODO: Lab 6.5 获取一个链表类型的`key`的长度
   // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
-  return ":1\r\n"; // 表示链表不存在
+  //   auto wlock = prepare_list_write_operation(key);
+  std::string meta_key = get_list_key(key);
+
+  std::string query_meta_key = "M:" + meta_key;
+  auto exist = lsm->get(query_meta_key);
+
+  uint64_t head, tail, length;
+  std::vector<std::pair<std::string, std::string>> to_put;
+
+  if (!exist) {
+    return ":0\r\n";
+  } else {
+    const std::string &raw_meta = exist.value();
+    if (raw_meta.size() < 24) {
+      return "-ERR internal data corrupted\r\n";
+    }
+    head = DecodeFixed64(raw_meta.substr(0, 8));
+    tail = DecodeFixed64(raw_meta.substr(8, 8));
+    length = DecodeFixed64(raw_meta.substr(16, 8));
+  }
+
+  return ":" + std::to_string(length) + "\r\n";
 }
 
 std::string RedisWrapper::redis_lrange(const std::string &key, int start,
                                        int stop) {
   // TODO: Lab 6.5 获取一个链表类型的`key`的指定范围内的元素
   // ? 返回值的格式, 你需要查询 RESP 官方文档或者问 LLM
-  return "*0\r\n"; // 表示链表不存在或者范围无效
+  std::string meta_key = get_list_key(key);
+
+  std::string query_meta_key = "M:" + meta_key;
+  auto exist = lsm->get(query_meta_key);
+
+  uint64_t head, tail, length;
+  std::vector<std::pair<std::string, std::string>> to_put;
+
+  if (!exist) {
+    return "*0\r\n";
+  } else {
+    const std::string &raw_meta = exist.value();
+    if (raw_meta.size() < 24) {
+      return "-ERR internal data corrupted\r\n";
+    }
+    head = DecodeFixed64(raw_meta.substr(0, 8));
+    tail = DecodeFixed64(raw_meta.substr(8, 8));
+    length = DecodeFixed64(raw_meta.substr(16, 8));
+  }
+
+  if (start < 0)
+    start = length + start;
+  if (stop < 0)
+    stop = length + stop;
+
+  // 边界检查
+  if (start < 0)
+    start = 0;
+  if (stop >= length)
+    stop = length - 1;
+  if (start > stop || length == 0)
+    return "*0\r\n";
+
+  std::vector<std::string> to_get;
+  head += start;
+
+  for (int i = start; i <= stop; ++i) {
+    std::string data_key = "D:" + meta_key;
+    EncodeFixed64(head++, data_key);
+    to_get.emplace_back(data_key);
+  }
+  auto get_res = lsm->get_batch(to_get);
+
+  std::string res = "*" + std::to_string(stop - start + 1) + "\r\n";
+
+  for (const auto &data : get_res) {
+    if (!data.second) {
+      return "-ERR list data not continue\r\n";
+    } else {
+      auto vluae = data.second.value();
+      res += "$" + std::to_string(vluae.size()) + "\r\n" + vluae + "\r\n";
+    }
+  }
+
+  return res;
 }
 
 std::string RedisWrapper::redis_zadd(std::vector<std::string> &args) {
