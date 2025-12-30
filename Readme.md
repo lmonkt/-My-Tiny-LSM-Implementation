@@ -13,5 +13,4 @@
 | **HSET** | 62,893 |
 
 ## 📜 致谢与许可证
-- 本实验教程源自开源项目 [Vanilla-Beauty/tiny-lsm](https://github.com/Vanilla-Beauty/tiny-lsm)
-- 本项目基于 **MIT 许可证** 开源 —— 详情参见 [LICENSE](LICENSE) 文件
+- 基本代码来自开源项目 [Vanilla-Beauty/tiny-lsm](https://github.com/Vanilla-Beauty/tiny-lsm)，感谢大佬付出
