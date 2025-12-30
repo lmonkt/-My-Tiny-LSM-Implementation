@@ -1,6 +1,9 @@
+#include <algorithm>
 #include <asio.hpp>
 #include <asio/ts/buffer.hpp>
 #include <asio/ts/internet.hpp>
+#include <cctype>
+#include <cstddef>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -69,7 +72,7 @@ private:
             // 继续读取剩余的批量字符串数据
             std::string full_request = request_line;
             for (int i = 0; i < numElements * 2;
-                 ++i) {                  // 每个元素有两个部分：长度行和数据行
+                 ++i) { // 每个元素有两个部分：长度行和数据行
               if (buffer_.size() == 0) { // 需要更多数据
                 // 确保缓冲区有足够的数据来读取完整的请求
                 // 这是一种简化的处理方式，实际生产中需要更复杂的解析逻辑
@@ -125,7 +128,153 @@ private:
     // TODO: Lab 6.6 处理网络传输的RESP字节流
     // TODO: Lab 6.6 形成参数并调用 redis_wrapper 的api
     // TODO: Lab 6.6 返回结果
-    return "";
+    if (request.empty())
+      return "-ERR Protocol error: empty request\r\n";
+
+    size_t cursor = 0;
+
+    if (request[cursor] != '*')
+      return "-ERR Protocol error: expected '*'\r\n";
+
+    cursor++;
+
+    size_t line_end = request.find("\r\n", cursor);
+    if (line_end == std::string::npos)
+      return "-ERR Protocol error: invalid request\r\n";
+
+    int element_num = 0;
+    try {
+      element_num = std::stoi(request.substr(cursor, line_end - cursor));
+    } catch (const std::exception &) {
+      return "-ERR Protocol error: invalid number of elements\r\n";
+    }
+
+    cursor = line_end + 2;
+
+    std::vector<std::string> args;
+    args.reserve(element_num);
+
+    for (int i = 0; i < element_num; ++i) {
+      cursor = request.find('$', line_end);
+      if (cursor >= request.size() || request[cursor] != '$') {
+        return "-ERR Protocol error: expected '$'\r\n";
+      }
+      cursor++;
+
+      line_end = request.find("\r\n", cursor);
+      if (line_end == std::string::npos)
+        return "-ERR Protocol error\r\n";
+
+      int length = 0;
+      try {
+        length = std::stoi(request.substr(cursor, line_end - cursor));
+      } catch (...) {
+        return "-ERR Protocol error\r\n";
+      }
+
+      cursor = line_end + 2;
+
+      if (cursor + length > request.size())
+        return "-ERR Protocol error: incomplete\r\n";
+
+      args.emplace_back(request.substr(cursor, length));
+
+      line_end = cursor + length;
+    }
+
+    if (args.empty())
+      return "-ERR empty command\r\n";
+    // std::transform(args[0].begin(), args[0].end(), args[0].begin(),
+    // ::toupper);
+
+    std::string cmd = args[0];
+    OPS op = string2Ops(cmd);
+
+    switch (op) {
+    // === 特殊操作 ===
+    case OPS::PING:
+      return "+PONG\r\n"; // 题目要求的特殊处理
+
+    case OPS::UNKNOWN:
+      return "-ERR unknown command '" + cmd + "'\r\n";
+
+    // === IO 操作 ===
+    case OPS::FLUSHALL:
+      return flushall_handler(redis_);
+    case OPS::SAVE:
+      return save_handler(redis_);
+
+    // === KV 基础操作 ===
+    case OPS::GET:
+      return get_handler(args, redis_);
+    case OPS::SET:
+      return set_handler(args, redis_);
+    case OPS::DEL:
+      return del_handler(args, redis_);
+    case OPS::INCR:
+      return incr_handler(args, redis_);
+    case OPS::DECR:
+      return decr_handler(args, redis_);
+    case OPS::EXPIRE:
+      return expire_handler(args, redis_);
+    case OPS::TTL:
+      return ttl_handler(args, redis_);
+
+    // === Hash 操作 ===
+    case OPS::HSET:
+      return hset_handler(args, redis_);
+    case OPS::HGET:
+      return hget_handler(args, redis_);
+    case OPS::HDEL:
+      return hdel_handler(args, redis_);
+    case OPS::HKEYS:
+      return hkeys_handler(args, redis_);
+
+    // === List 操作 ===
+    case OPS::LPUSH:
+      return lpush_handler(args, redis_);
+    case OPS::RPUSH:
+      return rpush_handler(args, redis_);
+    case OPS::LPOP:
+      return lpop_handler(args, redis_);
+    case OPS::RPOP:
+      return rpop_handler(args, redis_);
+    case OPS::LLEN:
+      return llen_handler(args, redis_);
+    case OPS::LRANGE:
+      return lrange_handler(args, redis_);
+
+    // === ZSet 操作 ===
+    case OPS::ZADD:
+      return zadd_handler(args, redis_);
+    case OPS::ZREM:
+      return zrem_handler(args, redis_);
+    case OPS::ZRANGE:
+      return zrange_handler(args, redis_);
+    case OPS::ZCARD:
+      return zcard_handler(args, redis_);
+    case OPS::ZSCORE:
+      return zscore_handler(args, redis_);
+    case OPS::ZINCRBY:
+      return zincrby_handler(args, redis_);
+    case OPS::ZRANK:
+      return zrank_handler(args, redis_);
+
+    // === Set 操作 ===
+    case OPS::SADD:
+      return sadd_handler(args, redis_);
+    case OPS::SREM:
+      return srem_handler(args, redis_);
+    case OPS::SISMEMBER:
+      return sismember_handler(args, redis_);
+    case OPS::SCARD:
+      return scard_handler(args, redis_);
+    case OPS::SMEMBERS:
+      return smembers_handler(args, redis_);
+
+    default:
+      return "-ERR unimplemented command\r\n";
+    }
   }
 
   tcp::socket socket_;
